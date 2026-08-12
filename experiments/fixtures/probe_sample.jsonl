@@ -1,0 +1,5 @@
+{"type":"session_meta","payload":{"type":"session_meta","id":"fixture-session-id"}}
+{"type":"event_msg","payload":{"type":"task_started","session_id":"fixture-session-id"}}
+{"type":"response_item","payload":{"type":"user_message","session_id":"fixture-session-id","message":"fixture text is never emitted"}}
+{"type":"response_item","payload":{"type":"custom_tool_call","status":"completed","arguments":{"private":"fixture argument is never emitted"}}}
+{"type":"event_msg","payload":{"type":"task_complete","session_id":"fixture-session-id"}}

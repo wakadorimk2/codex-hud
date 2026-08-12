@@ -18,6 +18,60 @@ ProbeはCodexをラップしません。
 - 生ログを共有しません。トークン、個人情報、プロジェクト固有情報を記録から除外またはマスクします。
 - 未確認のJSONL形式や内部イベント名を、確定した仕様として扱いません。
 
+## 初回実装
+
+初回実装は、`experiments/probe.py` の読み取り専用JSONL Probeです。
+
+Probeは、指定した一つのJSONLファイルだけを読みます。
+
+Probeは、ファイルを変更しません。
+
+Probeは、Codexを起動、操作、ラップしません。
+
+fixtureでの再現試験は、次のコマンドで実行します。
+
+```powershell
+python -B experiments\probe.py --fixture experiments\fixtures\probe_sample.jsonl --once
+python -B -m unittest discover -s experiments -v
+```
+
+実セッションの観測では、対象ファイルを明示します。
+
+```powershell
+python -B experiments\probe.py --session-file <session-jsonl-path> --once
+python -B experiments\probe.py --session-file <session-jsonl-path> --follow --poll-ms 250
+```
+
+`--follow` は現在のファイル末尾から追跡します。
+
+改行前の行は、次の改行まで保留します。
+
+ファイルサイズが小さくなった場合は、読み取り位置を先頭へ戻します。
+
+出力は匿名化したJSONLです。
+
+セッションIDとturn IDは短縮SHA-256へ変換します。
+
+本文、入力、出力、引数、結果、作業ディレクトリ、生のパスは出力しません。
+
+`task_started` と `task_complete` は、実際に観測したイベントとして暫定分類します。
+
+`custom_tool_call` の `status=completed` は、turn完了の根拠にしません。
+
+未確認のイベントは `Unknown` と記録します。
+
+`WaitingForUser` と `WaitingForApproval` は、根拠を確認するまで分類しません。
+
+2026-08-12のローカルJSONLサンプルでは、`event_msg`、`response_item`、`turn_context` などを観測しました。
+
+同サンプルでは、`task_started` と `task_complete` を観測しました。
+
+同サンプルでは、待機状態を示す根拠を確認できませんでした。
+
+この初回実装の判定は `Partial` です。
+
+内部イベント名は公開仕様として扱いません。
+
 ## 調査対象の優先順位
 
 最も単純で壊れにくい観測方法から調べます。
