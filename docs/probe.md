@@ -122,6 +122,30 @@ App Serverの終了後に、Desktopの既存PID、ウィンドウ有無、`sessi
 
 App Serverの内部イベント名は、今回のCLIバージョンで観測した事実として扱います。
 
+## Hook検証
+
+Hook検証は、`experiments/hook_probe.py`で行います。
+
+ProbeはHookの標準入力を読み取ります。
+
+Probeは、イベント名、匿名化したセッション識別子、匿名化したturn識別子、匿名化した作業ディレクトリ識別子、観測時刻、トップレベルキー名だけを記録します。
+
+Probeは、prompt、command、tool input、パス、モデル名、メッセージ本文を記録しません。
+
+Hookの追加候補は、`tools/install-hooks.ps1`で確認します。
+
+スクリプトは既定でdry-runです。
+
+`-Apply`を指定した場合だけ、既存のユーザーHook設定へ追加します。
+
+既存Hookのバックアップを作成します。
+
+Desktopの実発火とTrustを確認する手順は、`docs/hooks-setup.md`に記録します。
+
+2026-08-13時点では、Desktop実セッションでのHook発火は未確認です。
+
+このため、productionの状態保持とHUD実装のゲートは未通過です。
+
 ## 調査対象の優先順位
 
 最も単純で壊れにくい観測方法から調べます。

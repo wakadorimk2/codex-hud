@@ -1,0 +1,162 @@
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory = $true)]
+    [string]$HookCommandWindows,
+
+    [string]$HookCommand,
+
+    [string]$CodexHomePath,
+
+    [string[]]$Events = @(
+        'SessionStart',
+        'UserPromptSubmit',
+        'PermissionRequest',
+        'Stop',
+        'SessionEnd'
+    ),
+
+    [switch]$Apply
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+if ([string]::IsNullOrWhiteSpace($HookCommandWindows)) {
+    throw 'HookCommandWindows must not be empty.'
+}
+
+if ([string]::IsNullOrWhiteSpace($HookCommand)) {
+    $HookCommand = $HookCommandWindows
+}
+
+if ([string]::IsNullOrWhiteSpace($CodexHomePath)) {
+    if (-not [string]::IsNullOrWhiteSpace($env:CODEX_HOME)) {
+        $CodexHomePath = $env:CODEX_HOME
+    }
+    else {
+        $CodexHomePath = Join-Path ([Environment]::GetFolderPath('UserProfile')) '.codex'
+    }
+}
+
+$configPath = Join-Path $CodexHomePath 'hooks.json'
+
+if (Test-Path -LiteralPath $configPath -PathType Leaf) {
+    $configText = Get-Content -LiteralPath $configPath -Raw -Encoding utf8
+    $config = $configText | ConvertFrom-Json
+    if ($null -eq $config) {
+        $config = [pscustomobject]@{}
+    }
+}
+else {
+    $config = [pscustomobject]@{}
+}
+
+if ($null -eq $config.PSObject.Properties['hooks']) {
+    Add-Member -InputObject $config -MemberType NoteProperty -Name 'hooks' -Value ([pscustomobject]@{})
+}
+
+if ($null -eq $config.hooks) {
+    $config.hooks = [pscustomobject]@{}
+}
+
+function Test-HookCommandPresent {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$EventValue
+    )
+
+    foreach ($group in @($EventValue)) {
+        if ($null -eq $group -or $null -eq $group.PSObject.Properties['hooks']) {
+            continue
+        }
+
+        foreach ($handler in @($group.hooks)) {
+            if ($null -eq $handler) {
+                continue
+            }
+
+            foreach ($propertyName in @('commandWindows', 'command')) {
+                $property = $handler.PSObject.Properties[$propertyName]
+                if ($null -ne $property -and $property.Value -eq $HookCommandWindows) {
+                    return $true
+                }
+            }
+        }
+    }
+
+    return $false
+}
+
+$addedEvents = [System.Collections.Generic.List[string]]::new()
+$existingEvents = [System.Collections.Generic.List[string]]::new()
+
+foreach ($eventName in $Events) {
+    if ($eventName -notmatch '^[A-Za-z][A-Za-z0-9]*$') {
+        throw "Invalid event name: $eventName"
+    }
+
+    $eventProperty = $config.hooks.PSObject.Properties[$eventName]
+    if ($null -ne $eventProperty -and (Test-HookCommandPresent -EventValue $eventProperty.Value)) {
+        $existingEvents.Add($eventName)
+        continue
+    }
+
+    $handler = [ordered]@{
+        type = 'command'
+        command = $HookCommand
+        commandWindows = $HookCommandWindows
+        timeout = 1
+    }
+
+    if ($eventName -ne 'SessionEnd') {
+        $handler.async = $true
+    }
+
+    $newGroup = [pscustomobject]@{
+        hooks = @([pscustomobject]$handler)
+    }
+
+    if ($null -eq $eventProperty) {
+        Add-Member -InputObject $config.hooks -MemberType NoteProperty -Name $eventName -Value @($newGroup)
+    }
+    else {
+        $eventProperty.Value = @($eventProperty.Value) + @($newGroup)
+    }
+
+    $addedEvents.Add($eventName)
+}
+
+Write-Output "Config: $configPath"
+Write-Output "Mode: $(if ($Apply) { 'APPLY' } else { 'DRY-RUN' })"
+Write-Output "CommandWindows: $HookCommandWindows"
+Write-Output "Added events: $(if ($addedEvents.Count -gt 0) { $addedEvents -join ', ' } else { '(none)' })"
+Write-Output "Existing events: $(if ($existingEvents.Count -gt 0) { $existingEvents -join ', ' } else { '(none)' })"
+
+if (-not $Apply) {
+    Write-Output 'No file was changed. Re-run with -Apply after reviewing the command and event list.'
+    exit 0
+}
+
+$configDirectory = Split-Path -Parent $configPath
+if (-not (Test-Path -LiteralPath $configDirectory -PathType Container)) {
+    throw "Codex home does not exist: $configDirectory"
+}
+
+$timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$backupPath = "$configPath.backup-$timestamp"
+if (Test-Path -LiteralPath $configPath -PathType Leaf) {
+    Copy-Item -LiteralPath $configPath -Destination $backupPath
+    Write-Output "Backup: $backupPath"
+}
+
+$config | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $configPath -Encoding utf8
+
+$written = (Get-Content -LiteralPath $configPath -Raw -Encoding utf8) | ConvertFrom-Json
+foreach ($eventName in $Events) {
+    $eventProperty = $written.hooks.PSObject.Properties[$eventName]
+    if ($null -eq $eventProperty -or -not (Test-HookCommandPresent -EventValue $eventProperty.Value)) {
+        throw "Verification failed for event: $eventName"
+    }
+}
+
+Write-Output 'Configuration was written and verified.'
