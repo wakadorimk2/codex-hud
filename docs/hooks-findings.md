@@ -72,6 +72,16 @@ production Hookへの切替は、`docs/hooks-setup.md`のバックアップ付�
 
 production切替後のDesktop E2Eで、HUDの位置、クリック透過、フォーカス非取得を確認します。
 
+2026-08-13 08:10 JSTに、ユーザーHookをProbeからproduction bridgeへ切り替えました。
+
+切替時に`hooks.json.backup-<timestamp>`を作成しました。
+
+Probe commandは対象5イベントから削除しました。
+
+Enterlightの`PermissionRequest`、`PreToolUse`、`Stop`、`UserPromptSubmit`は保持しました。
+
+Hook commandのハッシュが変わったため、Codex Desktopの再起動とTrust確認が必要です。
+
 ## 次の判定条件
 
 Desktopの実セッションで少なくともturn開始、承認要求、turn停止の記録を取得しました。
