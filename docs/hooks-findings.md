@@ -41,12 +41,13 @@ Hookには、セッション識別子、turn識別子、作業ディレクトリ
 - 2026-08-13 07:26-07:27 JSTに、Probe JSONLへ`SessionStart` 3件と`UserPromptSubmit` 2件を記録しました。
 - 上記の記録では、`error_kind`はすべて空でした。
 - 上記の記録は同期Probeの起動を示します。
+- 2026-08-13の同一Probe JSONLで、`PermissionRequest`と`Stop`の記録も確認しました。
+- `SessionStart`、`UserPromptSubmit`、`PermissionRequest`、`Stop`の実発火を確認しました。
+- `SessionEnd`の実発火は未確認です。
 
 ### Unknown
 
-- Codex Desktopの実セッションで、Probeが各イベントを受信するかは未確認です。
-- 上記の記録が、今回TrustしたCodex Desktopセッションから発生したかは未確認です。
-- Desktopの実行環境で、HookのTrust後に`SessionStart`、`UserPromptSubmit`、`PermissionRequest`、`Stop`、`SessionEnd`がすべて発火するかは未確認です。
+- `SessionEnd`の実発火は未確認です。
 - Desktopでのイベント遅延、重複、取りこぼしは未確認です。
 
 ### Compatibility note
@@ -57,10 +58,24 @@ OpenAI Docsは、`async`をバックグラウンドHookの設定として説明�
 
 このリポジトリは、公開仕様よりも現在のDesktopで観測した互換性を優先し、Probeを同期Hookとして扱います。
 
+## Production implementation status
+
+production bridge、Named Pipe server、SessionStateStore、WPF/SkiaSharp lampを実装しました。
+
+production bridgeは、Probeと同じHook payloadからイベント名だけを読み取ります。
+
+production bridgeは、セッション識別子を短縮SHA-256へ変換します。
+
+production bridgeは、Pipe停止時に終了コード0を返します。
+
+production Hookへの切替は、`docs/hooks-setup.md`のバックアップ付き手順を使います。
+
+production切替後のDesktop E2Eで、HUDの位置、クリック透過、フォーカス非取得を確認します。
+
 ## 次の判定条件
 
-Desktopの実セッションで少なくともturn開始、承認要求、turn停止の記録を取得します。
+Desktopの実セッションで少なくともturn開始、承認要求、turn停止の記録を取得しました。
 
 各記録で、イベント名、匿名化セッション識別子、匿名化turn識別子、観測時刻を確認します。
 
-この条件を満たすまで、productionのbridge、receiver、Session State Store、HUDを追加しません。
+この条件を根拠として、productionのbridge、receiver、Session State Store、HUDを実装しました。

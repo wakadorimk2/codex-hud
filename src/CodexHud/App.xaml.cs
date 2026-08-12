@@ -24,6 +24,7 @@ public partial class App : Application
             return;
         }
 
+        EnsureWindowsDirectoryEnvironment();
         base.OnStartup(e);
 
         _instanceMutex = new Mutex(false, "Local\\CodexHud");
@@ -52,6 +53,25 @@ public partial class App : Application
 
         MainWindow = _window;
         _window.Show();
+    }
+
+    private static void EnsureWindowsDirectoryEnvironment()
+    {
+        if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("windir")))
+        {
+            return;
+        }
+
+        var windowsDirectory = Environment.GetEnvironmentVariable("SystemRoot");
+        if (string.IsNullOrWhiteSpace(windowsDirectory))
+        {
+            windowsDirectory = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+        }
+
+        if (!string.IsNullOrWhiteSpace(windowsDirectory))
+        {
+            Environment.SetEnvironmentVariable("windir", windowsDirectory);
+        }
     }
 
     protected override void OnExit(ExitEventArgs e)

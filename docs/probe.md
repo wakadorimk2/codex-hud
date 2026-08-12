@@ -146,9 +146,13 @@ Probeは短時間で終了し、Hookの入力を保持してから終了しま�
 
 Desktopの実発火とTrustを確認する手順は、`docs/hooks-setup.md`に記録します。
 
-2026-08-13時点では、Desktop実セッションでのHook発火は未確認です。
+2026-08-13時点で、Desktop実セッションから`SessionStart`、`UserPromptSubmit`、`PermissionRequest`、`Stop`を確認しました。
 
-このため、productionの状態保持とHUD実装のゲートは未通過です。
+`SessionEnd`の実発火は未確認です。
+
+この結果を根拠として、productionのbridge、Named Pipe receiver、Session State Store、HUDを実装しました。
+
+productionの実装は`docs/implementation.md`に記録します。
 
 ## 調査対象の優先順位
 

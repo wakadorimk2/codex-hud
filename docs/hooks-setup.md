@@ -85,3 +85,57 @@ CLIでの発火だけでは、Desktop Hookの成功条件を満たしません�
 復元が必要な場合は、バックアップの内容と対象パスを確認してから手動で戻します。
 
 このリポジトリのスクリプトは、既存設定を自動削除しません。
+
+## production bridgeへの切替
+
+ProbeでDesktop Hookの実発火を確認した後、production bridgeへ切り替えます。
+
+Release buildを先に実行します。
+
+```powershell
+dotnet build .\src\CodexHud\CodexHud.csproj -c Release
+```
+
+production commandとProbe commandを組み立てます。
+
+```powershell
+$hudPath = (Resolve-Path .\src\CodexHud\bin\Release\net10.0-windows\CodexHud.exe).Path
+$hudCommand = $hudPath + ' --hook'
+$probePath = (Resolve-Path .\experiments\hook_probe.py).Path
+$probeCommand = 'python -B "' + $probePath + '"'
+```
+
+dry-runで、対象イベント、削除対象Probe、追加対象production commandを確認します。
+
+```powershell
+pwsh -NoProfile -File .\tools\install-hooks.ps1 `
+  -HookCommandWindows $hudCommand `
+  -HookCommand $hudCommand `
+  -RemoveHookCommandWindows $probeCommand
+```
+
+確認後だけ`-Apply`を追加します。
+
+```powershell
+pwsh -NoProfile -File .\tools\install-hooks.ps1 `
+  -HookCommandWindows $hudCommand `
+  -HookCommand $hudCommand `
+  -RemoveHookCommandWindows $probeCommand `
+  -Apply
+```
+
+`-Apply`は`hooks.json`をタイムスタンプ付きでバックアップします。
+
+一致するProbe commandだけを削除します。
+
+Enterlightなど、一致しない既存Hookは保持します。
+
+切替後にCodex Desktopを再起動します。
+
+最初の`SessionStart`でHUDが起動することを確認します。
+
+`UserPromptSubmit`で青色の`Running`へ戻ることを確認します。
+
+`PermissionRequest`または`Stop`で橙色の`NeedsAttention`になることを確認します。
+
+Hook commandが利用できない場合も、bridgeは終了コード0を返します。

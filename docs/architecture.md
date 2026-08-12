@@ -55,6 +55,57 @@ HUD
 | Sound notification | 将来、状態遷移時に補助通知を出す | 繰り返し音や操作を妨げる音を既定にしない |
 | Window focus | 将来、ユーザーのクリックで対象ウィンドウへ移動する | ユーザー操作なしにフォーカスを奪わない |
 
+## Production implementation
+
+productionの最小経路は、次の固定境界を使います。
+
+```text
+Codex Hook
+  → CodexHud.exe --hook
+  → sanitized HookObservation
+  → Named Pipe
+  → SessionStateStore
+  → WPF MainWindow
+  → SkiaSharpLampRenderer
+```
+
+`HookBridge`は標準入力を一回読みます。
+
+`HookObservationParser`はイベント名を許可済みの列挙値へ変換します。
+
+セッション識別子はSHA-256の短縮値へ変換します。
+
+prompt、command、tool input、cwd、生のHook JSONはNamed Pipeへ渡しません。
+
+`NamedPipeStateServer`は一つのsanitized messageを受信します。
+
+`SessionStateStore`はHook JSONを解釈しません。
+
+HUDはStoreの現在状態だけを読み取ります。
+
+Named Pipeが停止しても、Hook bridgeは終了コード0を返します。
+
+`SessionStart`だけが、必要な場合にHUDプロセスを起動します。
+
+HUDはCodexプロセスを監視しません。
+
+## Lamp state projection
+
+この実装のランプは、研究用の六状態モデルを三状態へ投影します。
+
+| Hook event | Lamp state |
+| --- | --- |
+| `SessionStart`、`UserPromptSubmit` | `Running` |
+| `PermissionRequest`、`Stop` | `NeedsAttention` |
+| `SessionEnd` | `Idle` |
+| malformed、unknown | 現在状態を維持 |
+
+複数セッションがある場合、Storeは`NeedsAttention`、`Running`、`Idle`の順で集約します。
+
+`NeedsAttention`は時間経過で解除しません。
+
+次の`UserPromptSubmit`または`SessionStart`で、そのセッションを`Running`へ戻します。
+
 ### 正規化された観測
 
 Probeは情報源ごとの形式を、次の概念情報へ正規化します。
