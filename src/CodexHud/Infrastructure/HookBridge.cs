@@ -21,12 +21,13 @@ public sealed class HudProcessLauncher : IHudLauncher
             return Task.CompletedTask;
         }
 
-        Process.Start(new ProcessStartInfo
+        var startInfo = new ProcessStartInfo
         {
             FileName = processPath,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        })?.Dispose();
+            UseShellExecute = true
+        };
+
+        Process.Start(startInfo)?.Dispose();
 
         return Task.CompletedTask;
     }
