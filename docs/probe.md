@@ -138,6 +138,10 @@ Hookの追加候補は、`tools/install-hooks.ps1`で確認します。
 
 `-Apply`を指定した場合だけ、既存のユーザーHook設定へ追加します。
 
+現在のCodex Desktopでは`async` Hookが未対応のため、Probeは同期Hookとして登録します。
+
+Probeは短時間で終了し、Hookの入力を保持してから終了します。
+
 既存Hookのバックアップを作成します。
 
 Desktopの実発火とTrustを確認する手順は、`docs/hooks-setup.md`に記録します。

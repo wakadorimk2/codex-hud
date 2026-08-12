@@ -10,6 +10,12 @@ Probeは、匿名化した一行だけを一時JSONLへ追記します。
 
 Probeは、HUDを起動しません。
 
+Probeは、短時間の同期Hookとして登録します。
+
+現在のCodex Desktopは、`async` Hookを`async hooks are not supported yet`としてスキップします。
+
+このため、Probeへ`async`を追加しません。
+
 ## 記録する情報
 
 Probeは、次の情報だけを記録します。
@@ -54,6 +60,10 @@ pwsh -NoProfile -File .\tools\install-hooks.ps1 -HookCommandWindows $probeComman
 
 同じコマンドが登録済みのイベントには、重複登録しません。
 
+同じProbeコマンドに`async`が付いている場合は、その`async`だけを除去します。
+
+Enterlightなど、別のコマンドHookの`async`設定は変更しません。
+
 ## Desktopでの確認
 
 1. Codex Desktopを再起動します。
@@ -63,6 +73,8 @@ pwsh -NoProfile -File .\tools\install-hooks.ps1 -HookCommandWindows $probeComman
 5. `%TEMP%\codex-hud-hook-probe.jsonl`を確認します。
 6. 承認が必要な操作を一回実行します。
 7. Stop相当の記録を確認します。
+
+Hook画面に`async hooks are not supported yet`が残る場合は、Codex Desktopを再起動します。
 
 Desktopでの実発火を確認するまで、production HUDを成立済みと扱いません。
 

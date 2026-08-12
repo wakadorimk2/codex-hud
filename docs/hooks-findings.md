@@ -13,6 +13,7 @@ Codex DesktopのHookを、productionの状態取得に使えるかを確認し�
 - `experiments/hook_probe.py`は、Hook標準入力を匿名化してJSONLへ記録します。
 - `tools/install-hooks.ps1`は、既定でdry-runを実行します。
 - `tools/install-hooks.ps1 -Apply`だけがユーザーHook設定を書き換えます。
+- Codex Desktopは、Probeの`async` Hookを`async hooks are not supported yet`としてスキップしました。
 
 ## 公開仕様から確認した事項
 
@@ -35,12 +36,22 @@ Hookには、セッション識別子、turn識別子、作業ディレクトリ
 - Hook入力を生値を残さずに記録するProbeを実装しました。
 - malformed JSON、未知イベント、機微フィールドを含む入力をテストしました。
 - 既存Hook設定を保ったまま、追加候補をdry-runで確認できるスクリプトを実装しました。
+- Desktopのエラー表示から、現在の実行環境では`async` Hookが使えないことを確認しました。
+- Probeを同期Hookとして登録する修正を追加しました。
 
 ### Unknown
 
 - Codex Desktopの実セッションで、Probeが各イベントを受信するかは未確認です。
 - Desktopの実行環境で、HookのTrust後に`SessionStart`、`UserPromptSubmit`、`PermissionRequest`、`Stop`、`SessionEnd`がすべて発火するかは未確認です。
 - Desktopでのイベント遅延、重複、取りこぼしは未確認です。
+
+### Compatibility note
+
+OpenAI Docsは、`async`をバックグラウンドHookの設定として説明しています。
+
+今回のDesktop実行環境は、その設定を受理しませんでした。
+
+このリポジトリは、公開仕様よりも現在のDesktopで観測した互換性を優先し、Probeを同期Hookとして扱います。
 
 ## 次の判定条件
 

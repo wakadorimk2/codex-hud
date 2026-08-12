@@ -59,11 +59,14 @@ if ($null -eq $config.hooks) {
     $config.hooks = [pscustomobject]@{}
 }
 
-function Test-HookCommandPresent {
+function Repair-HookCommand {
     param(
         [Parameter(Mandatory = $true)]
         [object]$EventValue
     )
+
+    $matched = $false
+    $repaired = $false
 
     foreach ($group in @($EventValue)) {
         if ($null -eq $group -or $null -eq $group.PSObject.Properties['hooks']) {
@@ -78,17 +81,27 @@ function Test-HookCommandPresent {
             foreach ($propertyName in @('commandWindows', 'command')) {
                 $property = $handler.PSObject.Properties[$propertyName]
                 if ($null -ne $property -and $property.Value -eq $HookCommandWindows) {
-                    return $true
+                    $matched = $true
+                    $asyncProperty = $handler.PSObject.Properties['async']
+                    if ($null -ne $asyncProperty) {
+                        $handler.PSObject.Properties.Remove('async')
+                        $repaired = $true
+                    }
+                    break
                 }
             }
         }
     }
 
-    return $false
+    return [pscustomobject]@{
+        Matched = $matched
+        Repaired = $repaired
+    }
 }
 
 $addedEvents = [System.Collections.Generic.List[string]]::new()
 $existingEvents = [System.Collections.Generic.List[string]]::new()
+$repairedEvents = [System.Collections.Generic.List[string]]::new()
 
 foreach ($eventName in $Events) {
     if ($eventName -notmatch '^[A-Za-z][A-Za-z0-9]*$') {
@@ -96,9 +109,17 @@ foreach ($eventName in $Events) {
     }
 
     $eventProperty = $config.hooks.PSObject.Properties[$eventName]
-    if ($null -ne $eventProperty -and (Test-HookCommandPresent -EventValue $eventProperty.Value)) {
-        $existingEvents.Add($eventName)
-        continue
+    if ($null -ne $eventProperty) {
+        $repairResult = Repair-HookCommand -EventValue $eventProperty.Value
+        if ($repairResult.Matched) {
+            if ($repairResult.Repaired) {
+                $repairedEvents.Add($eventName)
+            }
+            else {
+                $existingEvents.Add($eventName)
+            }
+            continue
+        }
     }
 
     $handler = [ordered]@{
@@ -106,10 +127,6 @@ foreach ($eventName in $Events) {
         command = $HookCommand
         commandWindows = $HookCommandWindows
         timeout = 1
-    }
-
-    if ($eventName -ne 'SessionEnd') {
-        $handler.async = $true
     }
 
     $newGroup = [pscustomobject]@{
@@ -131,6 +148,7 @@ Write-Output "Mode: $(if ($Apply) { 'APPLY' } else { 'DRY-RUN' })"
 Write-Output "CommandWindows: $HookCommandWindows"
 Write-Output "Added events: $(if ($addedEvents.Count -gt 0) { $addedEvents -join ', ' } else { '(none)' })"
 Write-Output "Existing events: $(if ($existingEvents.Count -gt 0) { $existingEvents -join ', ' } else { '(none)' })"
+Write-Output "Repaired async events: $(if ($repairedEvents.Count -gt 0) { $repairedEvents -join ', ' } else { '(none)' })"
 
 if (-not $Apply) {
     Write-Output 'No file was changed. Re-run with -Apply after reviewing the command and event list.'
@@ -154,8 +172,13 @@ $config | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $configPath -Encod
 $written = (Get-Content -LiteralPath $configPath -Raw -Encoding utf8) | ConvertFrom-Json
 foreach ($eventName in $Events) {
     $eventProperty = $written.hooks.PSObject.Properties[$eventName]
-    if ($null -eq $eventProperty -or -not (Test-HookCommandPresent -EventValue $eventProperty.Value)) {
+    if ($null -eq $eventProperty) {
         throw "Verification failed for event: $eventName"
+    }
+
+    $writtenResult = Repair-HookCommand -EventValue $eventProperty.Value
+    if (-not $writtenResult.Matched -or $writtenResult.Repaired) {
+        throw "Verification failed for synchronous event: $eventName"
     }
 }
 
