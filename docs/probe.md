@@ -72,6 +72,56 @@ python -B experiments\probe.py --session-file <session-jsonl-path> --follow --po
 
 内部イベント名は公開仕様として扱いません。
 
+## App Server検証
+
+App Server検証は、`experiments/app_server_probe.py` で行います。
+
+Probeは、現在の `codex` CLIを `app-server --stdio` で起動します。
+
+Probeは、既存のCodex Desktopへ接続しません。
+
+Probeは、`ephemeral: true`、`sandbox: read-only`、`approvalPolicy: never` の専用threadを作ります。
+
+専用turnの入力は固定文です。
+
+```powershell
+python -B experiments\app_server_probe.py --timeout 90
+```
+
+`--no-turn` を指定すると、initializeだけを確認できます。
+
+```powershell
+python -B experiments\app_server_probe.py --no-turn
+```
+
+出力はJSONLです。
+
+Probeは、JSON-RPCの方向、種別、method、キー名、匿名化した識別子を出力します。
+
+Probeは、message本文、引数、パス、結果、エラー本文を出力しません。
+
+`thread/status/changed` では、`status_type` と `active_flags` の列挙値だけを出力します。
+
+App Serverの終了後に、Desktopの既存PID、ウィンドウ有無、`session_index.jsonl` の匿名化スナップショットを比較します。
+
+2026-08-12の実環境検証では、次を確認しました。
+
+- `initialize` 応答を取得しました。
+- `thread/start` と `turn/start` の応答を取得しました。
+- `thread/started`、`turn/started`、`thread/status/changed`、`turn/completed` を取得しました。
+- App Serverプロセスは終了しました。
+- Desktopの既存PID 2件を前後で確認しました。
+- Desktopのウィンドウ有無を前後で確認しました。
+- `session_index.jsonl` の件数と匿名化ID集合は前後で不変でした。
+- 判定は `App Serverイベント取得: Supported` です。
+- 判定は `Desktop共存: Supported` です。
+
+この結果は、別プロセスの専用App ServerとDesktopが共存できたことを示します。
+
+この結果は、既存DesktopセッションをApp Serverから観測できることを示しません。
+
+App Serverの内部イベント名は、今回のCLIバージョンで観測した事実として扱います。
+
 ## 調査対象の優先順位
 
 最も単純で壊れにくい観測方法から調べます。
