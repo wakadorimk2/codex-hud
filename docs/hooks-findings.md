@@ -38,10 +38,14 @@ Hookには、セッション識別子、turn識別子、作業ディレクトリ
 - 既存Hook設定を保ったまま、追加候補をdry-runで確認できるスクリプトを実装しました。
 - Desktopのエラー表示から、現在の実行環境では`async` Hookが使えないことを確認しました。
 - Probeを同期Hookとして登録する修正を追加しました。
+- 2026-08-13 07:26-07:27 JSTに、Probe JSONLへ`SessionStart` 3件と`UserPromptSubmit` 2件を記録しました。
+- 上記の記録では、`error_kind`はすべて空でした。
+- 上記の記録は同期Probeの起動を示します。
 
 ### Unknown
 
 - Codex Desktopの実セッションで、Probeが各イベントを受信するかは未確認です。
+- 上記の記録が、今回TrustしたCodex Desktopセッションから発生したかは未確認です。
 - Desktopの実行環境で、HookのTrust後に`SessionStart`、`UserPromptSubmit`、`PermissionRequest`、`Stop`、`SessionEnd`がすべて発火するかは未確認です。
 - Desktopでのイベント遅延、重複、取りこぼしは未確認です。
 
