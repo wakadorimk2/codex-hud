@@ -11,13 +11,16 @@
         ResizeMode="NoResize"
         Topmost="True"
         WindowStyle="None">
-    <Border x:Name="EditFrame"
-            BorderBrush="#FFF4F7FF"
-            BorderThickness="1"
-            CornerRadius="18"
-            Visibility="Collapsed">
+    <Grid>
         <rendering:SkiaLampView x:Name="LampSurface"
                                 HorizontalAlignment="Stretch"
                                 VerticalAlignment="Stretch" />
-    </Border>
+        <Border x:Name="EditFrame"
+                Panel.ZIndex="1"
+                Background="Transparent"
+                BorderBrush="#FFF4F7FF"
+                BorderThickness="1"
+                CornerRadius="18"
+                Visibility="Collapsed" />
+    </Grid>
 </Window>
