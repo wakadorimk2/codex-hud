@@ -133,6 +133,7 @@ public sealed class SessionStateStore : IDisposable
                 }
 
                 sessions = CreateSnapshot();
+                persistSessions = true;
                 scheduleRemoval = true;
             }
             else
