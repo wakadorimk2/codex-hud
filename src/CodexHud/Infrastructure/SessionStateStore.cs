@@ -113,7 +113,7 @@ public sealed class SessionStateStore : IDisposable
             return;
         }
 
-        var nextAppearance = MapAppearance(observation);
+        var nextAppearance = MapAppearance(observation.Event);
         var observedAtUtc = observation.ObservedAtUtc.ToUniversalTime();
         LampState previousState;
         LampState currentState;
@@ -473,19 +473,11 @@ public sealed class SessionStateStore : IDisposable
         };
     }
 
-    private static LampAppearance MapAppearance(HookObservation observation)
+    private static LampAppearance MapAppearance(HookEventKind eventKind)
     {
-        if (observation.Event != HookEventKind.Stop)
-        {
-            return LampAppearance.Default;
-        }
-
-        return string.Equals(
-            observation.PermissionMode,
-            "plan",
-            StringComparison.OrdinalIgnoreCase)
-            ? LampAppearance.PlanQuestion
-            : LampAppearance.Muted;
+        return eventKind == HookEventKind.Stop
+            ? LampAppearance.Muted
+            : LampAppearance.Default;
     }
 }
 

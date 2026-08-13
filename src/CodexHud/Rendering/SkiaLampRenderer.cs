@@ -192,11 +192,6 @@ public sealed class SkiaLampRenderer
             return new SKColor(82, 88, 98);
         }
 
-        if (appearance == LampAppearance.PlanQuestion)
-        {
-            return new SKColor(178, 112, 255);
-        }
-
         return state switch
         {
             LampState.Running => new SKColor(70, 150, 255),
@@ -216,11 +211,6 @@ public sealed class SkiaLampRenderer
         }
 
         var wave = (MathF.Sin(phase * MathF.PI * 2f) + 1f) * 0.5f;
-        if (appearance == LampAppearance.PlanQuestion)
-        {
-            return 0.08f + wave * 0.06f;
-        }
-
         return state == LampState.NeedsAttention
             ? 0.12f + wave * 0.08f
             : 0.04f + wave * 0.045f;

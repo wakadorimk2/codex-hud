@@ -18,12 +18,9 @@ from pathlib import Path
 from typing import Any
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 1
 DEFAULT_OUTPUT_NAME = "codex-hud-hook-probe.jsonl"
 SAFE_IDENTIFIER = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
-SAFE_PERMISSION_MODES = frozenset(
-    {"default", "acceptEdits", "plan", "dontAsk", "bypassPermissions"}
-)
 
 SENSITIVE_FIELDS = frozenset(
     {
@@ -65,15 +62,6 @@ def _safe_event_type(value: object) -> str | None:
     return _hash_identifier(value)
 
 
-def _safe_permission_mode(value: object) -> str | None:
-    value = _string_value(value)
-    if value is None:
-        return None
-    if value in SAFE_PERMISSION_MODES:
-        return value
-    return _hash_identifier(value)
-
-
 def _hashed_field(payload: dict[str, Any], field_name: str) -> str | None:
     value = _string_value(payload.get(field_name))
     return _hash_identifier(value) if value is not None else None
@@ -97,7 +85,6 @@ def _base_record() -> dict[str, Any]:
         "session_key": None,
         "turn_key": None,
         "project_key": None,
-        "permission_mode": None,
         "top_level_keys": [],
         "redacted_field_names": [],
         "error_kind": None,
@@ -133,7 +120,6 @@ def sanitize_hook_payload(
     record["session_key"] = _hashed_field(payload, "session_id")
     record["turn_key"] = _hashed_field(payload, "turn_id")
     record["project_key"] = _hashed_field(payload, "cwd")
-    record["permission_mode"] = _safe_permission_mode(payload.get("permission_mode"))
     record["top_level_keys"] = _safe_key_list(payload)
     record["redacted_field_names"] = sorted(SENSITIVE_FIELDS.intersection(payload))
 

@@ -24,16 +24,11 @@ Probeは、次の情報だけを記録します。
 - SHA-256で短縮したセッション識別子
 - SHA-256で短縮したturn識別子
 - SHA-256で短縮した作業ディレクトリ識別子
-- 許可済みの`permission_mode`値
 - 受信時刻
 - JSONのトップレベルキー名
 - 値を除外した機微フィールド名
 
-Probeは、prompt、command、tool input、パス、モデル名、assistant本文、transcriptを記録しません。
-
-`permission_mode`は`default`、`acceptEdits`、`plan`、`dontAsk`、`bypassPermissions`だけをそのまま記録します。
-
-未知の`permission_mode`は短縮ハッシュへ変換します。
+Probeは、prompt、command、tool input、パス、モデル名、メッセージ本文を記録しません。
 
 既定の出力先は、`%TEMP%\codex-hud-hook-probe.jsonl`です。
 
@@ -78,7 +73,6 @@ Enterlightなど、別のコマンドHookの`async`設定は変更しません�
 5. `%TEMP%\codex-hud-hook-probe.jsonl`を確認します。
 6. 承認が必要な操作を一回実行します。
 7. Stop相当の記録を確認します。
-8. Plan modeで選択肢を表示するturnを実行し、`Stop`と`permission_mode=plan`の組み合わせを確認します。
 
 Hook画面に`async hooks are not supported yet`が残る場合は、Codex Desktopを再起動します。
 
@@ -145,9 +139,5 @@ Enterlightなど、一致しない既存Hookは保持します。
 `PermissionRequest`で橙色の`NeedsAttention`になることを確認します。
 
 `Stop`でグレーの静止表示になり、`NeedsAttention`の一覧優先度を維持することを確認します。
-
-`Stop`と`permission_mode=plan`で紫色のゆっくりした脈動になり、`NeedsAttention`の一覧優先度を維持することを確認します。
-
-Plan選択肢へ回答した後、`UserPromptSubmit`で青色の`Running`へ戻ることを確認します。
 
 Hook commandが利用できない場合も、bridgeは終了コード0を返します。

@@ -24,17 +24,13 @@ dotnet run --project .\tests\CodexHud.Tests\CodexHud.Tests.csproj -c Release
 python -m unittest discover -s experiments -p 'test_*.py'
 ```
 
-テストは、三状態と表示属性の描画、Plan mode表示、可視ピクセル、複数セッションの独立遷移、状態優先順、`SessionEnd`の猶予と削除中止、状態スナップショットの復元、時刻なし旧スナップショットの除外、表示属性なし旧スナップショットの復元、セッションカタログの匿名化とアーカイブ照合、1時間整理、Hook payloadの匿名化、`permission_mode`の保持、旧Named Pipe message、Named Pipe、bridgeの終了コード、DPI配置、折返し、位置の永続化を確認します。
+テストは、三状態と表示属性の描画、可視ピクセル、複数セッションの独立遷移、状態優先順、`SessionEnd`の猶予と削除中止、状態スナップショットの復元、時刻なし旧スナップショットの除外、表示属性なし旧スナップショットの復元、セッションカタログの匿名化とアーカイブ照合、1時間整理、Hook payloadの匿名化、Named Pipe、bridgeの終了コード、DPI配置、折返し、位置の永続化を確認します。
 
 ## Runtime modes
 
 引数なしで起動すると、HUDとNamed Pipe serverを起動します。
 
 `--hook`で起動すると、標準入力をsanitized messageへ変換してNamed Pipeへ送信し、終了します。
-
-production bridgeはHook payloadのイベント名と任意の`permission_mode`だけをNamed Pipeへ渡します。
-
-prompt、assistant本文、transcriptはNamed Pipeへ渡しません。
 
 `SessionStart`のbridge invocationだけが、HUDプロセスの起動を試みます。
 
@@ -72,7 +68,6 @@ Hook設定とEnterlightなどの既存Hookは変更しません。
 - 同じ状態の順序が初回観測順で安定する。
 - 画面幅を超えたランプが次の行へ折り返す。
 - `PermissionRequest`で対象セッションが橙色で脈動する。
-- `Stop`と`permission_mode=plan`で対象セッションが紫色で約2.8秒周期に脈動する。
 - `Stop`で対象セッションがグレーで静止する。
 - `Stop`が`NeedsAttention`の一覧優先度を維持する。
 - `SessionEnd`で対象セッションがグレーになり、約240ms後に消える。

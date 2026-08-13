@@ -14,7 +14,7 @@ internal static class Program
     {
         var tests = new (string Name, Func<Task> Run)[]
         {
-            ("renderer renders state and special appearances correctly", TestRenderer),
+            ("renderer renders state and muted appearance correctly", TestRenderer),
             ("state store applies mappings and preserves unknown events", TestStateStore),
             ("state store keeps independent sessions in stable priority order", TestMultipleSessions),
             ("session end shows idle grace and supports prompt cancellation", TestSessionEndGrace),
@@ -25,7 +25,6 @@ internal static class Program
             ("catalog read failure keeps saved sessions", TestCatalogReadFailure),
             ("session catalog cleanup removes archived and stale sessions", TestSessionCatalogCleanup),
             ("hook parser keeps raw payload out of the sanitized message", TestSanitization),
-            ("hook parser preserves plan permission mode and legacy messages", TestHookPermissionMode),
             ("pipe server and sender transfer sanitized state", TestPipeTransfer),
             ("bridge returns zero when the pipe is stopped", TestBridgeWhenPipeStopped),
             ("lamp placement remains 36 DIP at 100 and 150 percent inputs", TestLampPlacement),
@@ -105,26 +104,9 @@ internal static class Program
             LampState.NeedsAttention,
             LampAppearance.Muted,
             1.35f);
-        using var planQuestion = RenderBitmap(
-            renderer,
-            LampState.NeedsAttention,
-            LampAppearance.PlanQuestion,
-            0f);
-        using var planQuestionLater = RenderBitmap(
-            renderer,
-            LampState.NeedsAttention,
-            LampAppearance.PlanQuestion,
-            0.5f);
-        using var defaultAttention = RenderBitmap(
-            renderer,
-            LampState.NeedsAttention,
-            LampAppearance.Default,
-            0.35f);
 
         Assert.True(AreBitmapsEqual(idle, muted), "Muted Stop did not use the Idle gray appearance.");
         Assert.True(AreBitmapsEqual(muted, mutedLater), "Muted Stop is not static.");
-        Assert.True(!AreBitmapsEqual(planQuestion, planQuestionLater), "PlanQuestion is not animated.");
-        Assert.True(!AreBitmapsEqual(planQuestion, defaultAttention), "PlanQuestion did not use a distinct color.");
 
         return Task.CompletedTask;
     }
@@ -150,23 +132,11 @@ internal static class Program
             Assert.Equal(LampState.NeedsAttention, store.CurrentState);
             Assert.Equal(LampAppearance.Muted, store.CurrentSessions[0].Appearance);
 
-            store.Apply(new HookObservation(
-                HookEventKind.Stop,
-                sessionId,
-                secondObservedAtUtc.AddMinutes(2),
-                "plan"));
-            Assert.Equal(LampState.NeedsAttention, store.CurrentState);
-            Assert.Equal(LampAppearance.PlanQuestion, store.CurrentSessions[0].Appearance);
-
             store.Apply(new HookObservation(HookEventKind.Unknown, sessionId, DateTimeOffset.UtcNow));
             Assert.Equal(LampState.NeedsAttention, store.CurrentState);
-            Assert.Equal(LampAppearance.PlanQuestion, store.CurrentSessions[0].Appearance);
+            Assert.Equal(LampAppearance.Muted, store.CurrentSessions[0].Appearance);
 
-            store.Apply(new HookObservation(
-                HookEventKind.UserPromptSubmit,
-                sessionId,
-                DateTimeOffset.UtcNow,
-                "plan"));
+            store.Apply(new HookObservation(HookEventKind.UserPromptSubmit, sessionId, DateTimeOffset.UtcNow));
             Assert.Equal(LampState.Running, store.CurrentState);
             Assert.Equal(LampAppearance.Default, store.CurrentSessions[0].Appearance);
 
@@ -201,12 +171,11 @@ internal static class Program
             store.Apply(new HookObservation(
                 HookEventKind.Stop,
                 secondSession,
-                DateTimeOffset.UtcNow,
-                "plan"));
+                DateTimeOffset.UtcNow));
             var attentionFirst = store.CurrentSessions;
             Assert.Equal(secondSession, attentionFirst[0].SessionId);
             Assert.Equal(LampState.NeedsAttention, attentionFirst[0].State);
-            Assert.Equal(LampAppearance.PlanQuestion, attentionFirst[0].Appearance);
+            Assert.Equal(LampAppearance.Muted, attentionFirst[0].Appearance);
             Assert.Equal(firstSession, attentionFirst[1].SessionId);
 
             store.Apply(new HookObservation(
@@ -289,8 +258,7 @@ internal static class Program
                 firstStore.Apply(new HookObservation(
                     HookEventKind.Stop,
                     attentionSession,
-                    DateTimeOffset.UtcNow,
-                    "plan"));
+                    DateTimeOffset.UtcNow));
             }
 
             var persistedJson = File.ReadAllText(path);
@@ -306,7 +274,7 @@ internal static class Program
                 Assert.Equal(2, restored.Count);
                 Assert.Equal(attentionSession, restored[0].SessionId);
                 Assert.Equal(LampState.NeedsAttention, restored[0].State);
-                Assert.Equal(LampAppearance.PlanQuestion, restored[0].Appearance);
+                Assert.Equal(LampAppearance.Muted, restored[0].Appearance);
                 Assert.Equal(runningSession, restored[1].SessionId);
 
                 restoredStore.Apply(new HookObservation(
@@ -593,36 +561,6 @@ internal static class Program
         var sanitized = HookObservationParser.SerializeTransportMessage(observation);
         Assert.True(!sanitized.Contains(secretPrompt, StringComparison.Ordinal), "Raw prompt crossed the boundary.");
         Assert.True(!sanitized.Contains("private\\project", StringComparison.Ordinal), "Raw cwd crossed the boundary.");
-        return Task.CompletedTask;
-    }
-
-    private static Task TestHookPermissionMode()
-    {
-        const string payload = "{\"hook_event_name\":\"Stop\",\"session_id\":\"session-plan\",\"permission_mode\":\"plan\"}";
-        Assert.True(
-            HookObservationParser.TryParseHookPayload(payload, out var observation),
-            "Plan Hook payload did not parse.");
-        Assert.NotNull(observation);
-        Assert.Equal("plan", observation!.PermissionMode);
-
-        var serialized = HookObservationParser.SerializeTransportMessage(observation);
-        Assert.True(
-            serialized.Contains("\"permissionMode\":\"plan\"", StringComparison.Ordinal),
-            "Plan permission mode did not cross the sanitized transport.");
-        Assert.True(
-            HookObservationParser.TryParseTransportMessage(serialized, out var roundTripped),
-            "Sanitized Plan message did not parse.");
-        Assert.NotNull(roundTripped);
-        Assert.Equal("plan", roundTripped!.PermissionMode);
-
-        const string legacyMessage = "{\"event\":\"Stop\",\"sessionId\":\"session-legacy\",\"observedAtUtc\":\"2026-08-13T08:00:00Z\"}";
-        Assert.True(
-            HookObservationParser.TryParseTransportMessage(legacyMessage, out var legacyObservation),
-            "Legacy sanitized message did not parse.");
-        Assert.NotNull(legacyObservation);
-        Assert.True(
-            legacyObservation!.PermissionMode is null,
-            "Legacy sanitized message unexpectedly gained a permission mode.");
         return Task.CompletedTask;
     }
 
