@@ -72,12 +72,15 @@ public sealed class SkiaLampView : SKElement
             _fromState = _state;
         }
 
+        UpdateAnimationTimer();
         InvalidateVisual();
     }
 
     private void UpdateAnimationTimer()
     {
-        if (_state == LampState.Idle)
+        var transitionActive = _fromState != _state
+            && GetElapsedSinceStateChange().TotalSeconds < 0.24;
+        if (_state == LampState.Idle && !transitionActive)
         {
             _animationTimer.Stop();
             return;

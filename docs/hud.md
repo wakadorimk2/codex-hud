@@ -157,7 +157,25 @@ HUDは`.codex`のファイル形式、App Serverのイベント、CLIの出力�
 
 ## 現在のランプ実装
 
-現在のPassive modeは、約36 DIP四方のランプ一つです。
+現在のPassive modeは、セッションごとに約36 DIP四方のランプを表示します。
+
+ランプはグループの左上を基準に横へ並びます。
+
+Primary monitorの作業領域幅を超える場合は、次の行へ折り返します。
+
+ランプ間隔は8 DIPです。
+
+ランプは縮小しません。
+
+表示順は`NeedsAttention`、`Running`、`Idle`です。
+
+同じ状態のランプは、初回観測順を維持します。
+
+セッション数が0の場合、表示領域を非表示にします。
+
+`SessionEnd`後のランプは約240msだけグレーで表示し、その後に削除します。
+
+猶予中に`UserPromptSubmit`を受けた場合は、削除せずに青色へ戻します。
 
 UIシェルはWPFです。
 
@@ -187,13 +205,21 @@ UIシェルはWPFです。
 
 `Ctrl + Alt + Shift + L`で位置編集モードへ切り替えます。
 
-位置編集モードでは、白い枠を表示し、ランプをドラッグできます。
+位置編集モードでは、白い枠を表示し、グループ全体をドラッグできます。
 
 同じホットキーで位置編集モードを終了し、位置を保存します。
 
 位置は`%LOCALAPPDATA%\CodexHud\position.json`へ保存します。
 
 保存位置はPrimary monitorの作業領域内へ制限します。
+
+セッション状態は`%LOCALAPPDATA%\CodexHud\sessions.json`へ保存します。
+
+保存する値は、匿名化済みセッションID、ランプ状態、初回観測順だけです。
+
+`SessionEnd`の一時的な`Idle`状態は保存しません。
+
+HUD再起動時は、保存済みの`Running`と`NeedsAttention`を復元します。
 
 保存位置がない場合は、Primary monitorの右下へ16 DIPの余白を付けて配置します。
 

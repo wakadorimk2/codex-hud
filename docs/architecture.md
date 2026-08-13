@@ -81,7 +81,11 @@ prompt、command、tool input、cwd、生のHook JSONはNamed Pipeへ渡しま�
 
 `SessionStateStore`はHook JSONを解釈しません。
 
-HUDはStoreの現在状態だけを読み取ります。
+HUDはStoreのセッション一覧だけを読み取ります。
+
+`SessionLampState`は、匿名化済みセッションID、ランプ状態、初回観測順を保持します。
+
+HUDは生のHook payload、prompt、command、tool input、cwdを受け取りません。
 
 Named Pipeが停止しても、Hook bridgeは終了コード0を返します。
 
@@ -100,7 +104,19 @@ HUDはCodexプロセスを監視しません。
 | `SessionEnd` | `Idle` |
 | malformed、unknown | 現在状態を維持 |
 
-複数セッションがある場合、Storeは`NeedsAttention`、`Running`、`Idle`の順で集約します。
+複数セッションがある場合、Storeは`NeedsAttention`、`Running`、`Idle`の順で一覧を返します。
+
+同じ状態のセッションは、初回観測順を維持します。
+
+`SessionEnd`は対象セッションを短時間`Idle`として保持します。
+
+約240ms後に対象セッションを一覧から削除します。
+
+猶予中の`UserPromptSubmit`は削除を中止し、対象セッションを`Running`へ戻します。
+
+`SessionEnd`の一時的な`Idle`状態は保存しません。
+
+実環境で`SessionEnd`が届かない場合、時間経過でセッションを削除しません。
 
 `NeedsAttention`は時間経過で解除しません。
 
