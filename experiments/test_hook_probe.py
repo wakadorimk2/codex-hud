@@ -60,6 +60,7 @@ class HookPayloadTests(unittest.TestCase):
                 {
                     "hook_event_name": "Stop",
                     "last_assistant_message": "private answer",
+                    "permission_mode": "plan",
                 }
             )
         )
@@ -68,9 +69,23 @@ class HookPayloadTests(unittest.TestCase):
         )
 
         self.assertEqual(stop_record["event_type"], "Stop")
+        self.assertEqual(stop_record["permission_mode"], "plan")
         self.assertNotIn("private answer", json.dumps(stop_record))
         self.assertEqual(unknown_record["event_type"], "FutureEvent")
         self.assertIsNone(unknown_record["error_kind"])
+
+    def test_unknown_permission_mode_is_hashed(self) -> None:
+        record = sanitize_hook_payload(
+            json.dumps(
+                {
+                    "hook_event_name": "Stop",
+                    "permission_mode": "future-mode",
+                }
+            )
+        )
+
+        self.assertTrue(record["permission_mode"].startswith("sha256:"))
+        self.assertNotIn("future-mode", json.dumps(record))
 
     def test_malformed_payload_is_safe(self) -> None:
         invalid_json = sanitize_hook_payload(b"not-json")

@@ -65,7 +65,10 @@ public sealed class SkiaLampView : SKElement
             (float)(elapsed.TotalSeconds / 0.24),
             0f,
             1f);
-        var phase = (float)(_clock.Elapsed.TotalSeconds * 0.72);
+        var phaseSpeed = _appearance == LampAppearance.PlanQuestion
+            ? 0.36
+            : 0.72;
+        var phase = (float)(_clock.Elapsed.TotalSeconds * phaseSpeed);
 
         _renderer.Render(
             e.Surface.Canvas,

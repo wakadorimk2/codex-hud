@@ -23,6 +23,10 @@ Hookコマンドは、JSONオブジェクトを標準入力で受け取ります
 
 Hookには、セッション識別子、turn識別子、作業ディレクトリ、イベント名などが含まれます。
 
+turn-scoped Hookには、現在のpermission modeを示す`permission_mode`が含まれます。
+
+公式仕様の`permission_mode`には`plan`が含まれます。
+
 複数の一致するHookは実行されます。
 
 未管理のHookは、実行前にレビューとTrustが必要です。
@@ -43,12 +47,14 @@ Hookには、セッション識別子、turn識別子、作業ディレクトリ
 - 上記の記録は同期Probeの起動を示します。
 - 2026-08-13の同一Probe JSONLで、`PermissionRequest`と`Stop`の記録も確認しました。
 - `SessionStart`、`UserPromptSubmit`、`PermissionRequest`、`Stop`の実発火を確認しました。
+- Probeは`permission_mode`を安全なメタデータとして記録します。
 - `SessionEnd`の実発火は未確認です。
 
 ### Unknown
 
 - `SessionEnd`の実発火は未確認です。
 - Desktopでのイベント遅延、重複、取りこぼしは未確認です。
+- Plan modeの選択肢表示時に`Stop`と`permission_mode=plan`が同時に発火することは未確認です。
 
 ### Compatibility note
 
@@ -62,9 +68,11 @@ OpenAI Docsは、`async`をバックグラウンドHookの設定として説明�
 
 production bridge、Named Pipe server、SessionStateStore、WPF/SkiaSharp lampを実装しました。
 
-production bridgeは、Probeと同じHook payloadからイベント名だけを読み取ります。
+production bridgeは、Probeと同じHook payloadからイベント名と`permission_mode`だけを読み取ります。
 
 production bridgeは、セッション識別子を短縮SHA-256へ変換します。
+
+production bridgeは、prompt、assistant本文、transcriptを読み取りません。
 
 production bridgeは、Pipe停止時に終了コード0を返します。
 

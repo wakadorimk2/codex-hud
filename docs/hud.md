@@ -185,6 +185,14 @@ Primary monitorの作業領域幅を超える場合は、次の行へ折り返�
 
 `Stop`のランプは暗いグレーで静止します。
 
+`Stop`のHook payloadが`permission_mode=plan`の場合、ランプはPlan選択肢待ちとして紫色で表示します。
+
+Plan選択肢待ちのランプは、約2.8秒周期でゆっくり脈動します。
+
+Plan選択肢待ちのランプは、`NeedsAttention`の一覧優先度を維持します。
+
+次の`UserPromptSubmit`で、Plan選択肢待ちのランプを青色の`Running`へ戻します。
+
 UIシェルはWPFです。
 
 描画面は`SkiaSharp.Views.WPF`の`SKElement`です。
@@ -200,6 +208,8 @@ UIシェルはWPFです。
 `Default`の`NeedsAttention`は橙色で強く発光し、緩く脈動します。
 
 `Stop`の`Muted`表示は暗いグレーで静止し、残光リングを表示しません。
+
+`PlanQuestion`表示は`#B270FF`の紫色を使用し、通常の`NeedsAttention`より弱く、遅い脈動を行います。
 
 `NeedsAttention`は点滅で解除しません。
 

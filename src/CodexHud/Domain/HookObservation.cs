@@ -18,7 +18,8 @@ public enum HookEventKind
 public sealed record HookObservation(
     HookEventKind Event,
     string SessionId,
-    DateTimeOffset ObservedAtUtc);
+    DateTimeOffset ObservedAtUtc,
+    string? PermissionMode = null);
 
 public static class HookObservationParser
 {
@@ -48,6 +49,9 @@ public static class HookObservationParser
                 document.RootElement,
                 "session_id",
                 "conversation_id");
+            var permissionMode = GetFirstString(
+                document.RootElement,
+                "permission_mode");
 
             if (eventName is null)
             {
@@ -57,7 +61,8 @@ public static class HookObservationParser
             observation = new HookObservation(
                 ParseEvent(eventName),
                 HashSessionId(sessionId),
-                DateTimeOffset.UtcNow);
+                DateTimeOffset.UtcNow,
+                permissionMode);
             return true;
         }
         catch (JsonException)
@@ -86,7 +91,8 @@ public static class HookObservationParser
             observation = new HookObservation(
                 ParseEvent(message.Event),
                 message.SessionId,
-                message.ObservedAtUtc == default ? DateTimeOffset.UtcNow : message.ObservedAtUtc);
+                message.ObservedAtUtc == default ? DateTimeOffset.UtcNow : message.ObservedAtUtc,
+                message.PermissionMode);
             return true;
         }
         catch (JsonException)
@@ -100,7 +106,8 @@ public static class HookObservationParser
         var message = new SanitizedHookMessage(
             observation.Event.ToString(),
             observation.SessionId,
-            observation.ObservedAtUtc);
+            observation.ObservedAtUtc,
+            observation.PermissionMode);
         return JsonSerializer.Serialize(message, JsonOptions);
     }
 
@@ -143,11 +150,13 @@ public static class HookObservationParser
     private sealed record SanitizedHookMessage(
         string Event,
         string SessionId,
-        DateTimeOffset ObservedAtUtc);
+        DateTimeOffset ObservedAtUtc,
+        string? PermissionMode);
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
         Converters = { new JsonStringEnumConverter() }
     };
 }

@@ -73,6 +73,10 @@ Codex Hook
 
 `HookObservationParser`はイベント名を許可済みの列挙値へ変換します。
 
+`HookObservationParser`は、Hook payloadの`permission_mode`を任意のメタデータとして保持します。
+
+`Stop`と`permission_mode=plan`の組み合わせだけを、Plan選択肢待ちの表示へ投影します。
+
 セッション識別子はSHA-256の短縮値へ変換します。
 
 prompt、command、tool input、cwd、生のHook JSONはNamed Pipeへ渡しません。
@@ -117,6 +121,7 @@ HUDはCodexプロセスを監視しません。
 | --- | --- | --- |
 | `SessionStart`、`UserPromptSubmit` | `Running` | `Default` |
 | `PermissionRequest` | `NeedsAttention` | `Default` |
+| `Stop` + `permission_mode=plan` | `NeedsAttention` | `PlanQuestion` |
 | `Stop` | `NeedsAttention` | `Muted` |
 | `SessionEnd` | `Idle` | `Default` |
 | malformed、unknown | 現在状態を維持 | 現在属性を維持 |
@@ -126,6 +131,14 @@ HUDはCodexプロセスを監視しません。
 `LampAppearance`は表示方法を表します。
 
 `Stop`は`NeedsAttention`の優先度を維持し、`Muted`で暗いグレーの静止表示にします。
+
+`Stop`と`permission_mode=plan`は、`NeedsAttention`の優先度を維持し、`PlanQuestion`で紫色のゆっくりした脈動を表示します。
+
+`PlanQuestion`は約2.8秒周期で脈動します。
+
+通常の`Stop`、`PermissionRequest`、`Running`の状態と表示属性は変更しません。
+
+Hook payloadのprompt、assistant本文、transcriptはPlan判定に使いません。
 
 複数セッションがある場合、Storeは`NeedsAttention`、`Running`、`Idle`の順で一覧を返します。
 
