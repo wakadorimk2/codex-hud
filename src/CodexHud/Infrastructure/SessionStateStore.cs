@@ -7,7 +7,7 @@ public sealed class SessionStateStore : IDisposable
     private static readonly TimeSpan DefaultSessionEndGrace =
         TimeSpan.FromMilliseconds(240);
     private static readonly TimeSpan DefaultSessionCleanupAge =
-        TimeSpan.FromHours(24);
+        TimeSpan.FromHours(1);
 
     private readonly object _gate = new();
     private readonly Dictionary<string, SessionLampState> _sessionStates = new(StringComparer.Ordinal);
@@ -30,8 +30,7 @@ public sealed class SessionStateStore : IDisposable
         }
 
         var restoredSessions = _snapshotStore.Load();
-        var legacyObservedAtUtc = DateTimeOffset.UtcNow;
-        var hasLegacySessions = false;
+        var hasDiscardedSessions = false;
         foreach (var session in restoredSessions)
         {
             if (session.State == LampState.Idle
@@ -46,23 +45,19 @@ public sealed class SessionStateStore : IDisposable
                 continue;
             }
 
-            var restoredSession = session;
-            if (!restoredSession.LastObservedAtUtc.HasValue)
+            if (!session.LastObservedAtUtc.HasValue)
             {
-                restoredSession = restoredSession with
-                {
-                    LastObservedAtUtc = legacyObservedAtUtc
-                };
-                hasLegacySessions = true;
+                hasDiscardedSessions = true;
+                continue;
             }
 
-            _sessionStates.Add(restoredSession.SessionId, restoredSession);
+            _sessionStates.Add(session.SessionId, session);
             _nextFirstSeenOrder = Math.Max(
                 _nextFirstSeenOrder,
-                restoredSession.FirstSeenOrder);
+                session.FirstSeenOrder);
         }
 
-        if (hasLegacySessions)
+        if (hasDiscardedSessions)
         {
             _snapshotStore.TrySave(_sessionStates.Values);
         }
@@ -429,11 +424,16 @@ public sealed class SessionStateStore : IDisposable
             return true;
         }
 
+        if (catalogEntry is null)
+        {
+            return true;
+        }
+
         var lastActivityAtUtc = Max(
             session.LastObservedAtUtc,
             catalogEntry?.LastUpdatedAtUtc);
-        return lastActivityAtUtc.HasValue
-            && nowUtc - lastActivityAtUtc.Value >= maxAge;
+        return !lastActivityAtUtc.HasValue
+            || nowUtc - lastActivityAtUtc.Value >= maxAge;
     }
 
     private static DateTimeOffset? Max(

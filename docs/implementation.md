@@ -24,7 +24,7 @@ dotnet run --project .\tests\CodexHud.Tests\CodexHud.Tests.csproj -c Release
 python -m unittest discover -s experiments -p 'test_*.py'
 ```
 
-テストは、三状態の描画、可視ピクセル、複数セッションの独立遷移、状態優先順、`SessionEnd`の猶予と削除中止、状態スナップショットの復元、旧スナップショットの日時移行、セッションカタログの匿名化とアーカイブ照合、24時間整理、Hook payloadの匿名化、Named Pipe、bridgeの終了コード、DPI配置、折返し、位置の永続化を確認します。
+テストは、三状態の描画、可視ピクセル、複数セッションの独立遷移、状態優先順、`SessionEnd`の猶予と削除中止、状態スナップショットの復元、時刻なし旧スナップショットの除外、セッションカタログの匿名化とアーカイブ照合、1時間整理、Hook payloadの匿名化、Named Pipe、bridgeの終了コード、DPI配置、折返し、位置の永続化を確認します。
 
 ## Runtime modes
 
@@ -36,19 +36,23 @@ python -m unittest discover -s experiments -p 'test_*.py'
 
 Pipe serverが停止していても、bridgeは終了コード0を返します。
 
-HUD起動時は`%LOCALAPPDATA%\CodexHud\sessions.json`から`Running`と`NeedsAttention`を復元します。
+HUD起動時は`%LOCALAPPDATA%\CodexHud\sessions.json`から、有効な最終観測日時を持つ`Running`と`NeedsAttention`を復元します。
 
 `SessionEnd`を受けたセッションは約240msだけ`Idle`で表示し、その後に削除します。
 
-HUD起動時にセッションカタログを一回読み取り、アーカイブ済みセッションを削除します。
+HUD起動時にセッションカタログを一回読み取り、アーカイブ済みセッションとカタログにないセッションを削除します。
 
-HUDは5分ごとにセッションカタログを読み取ります。
+HUDは1分ごとにセッションカタログを読み取ります。
 
-最終Hook観測またはカタログ最終更新から24時間以上経過したセッションを削除します。
+成功したカタログに存在しないセッションは、時刻に関係なく削除します。
+
+カタログに存在するセッションは、最終Hook観測またはカタログ最終更新から1時間以上経過した場合に削除します。
+
+Hook観測時刻とカタログ最終更新時刻がどちらもないセッションは、HUDへ表示しません。
 
 カタログを読み取れない場合、その周期の自動削除を実行しません。
 
-旧スナップショットに最終観測日時がない場合、初回起動時刻を移行時の基準にします。
+旧スナップショットに最終観測日時がないセッションは、HUDへ表示しません。
 
 Hook設定とEnterlightなどの既存Hookは変更しません。
 
@@ -57,7 +61,7 @@ Hook設定とEnterlightなどの既存Hookは変更しません。
 - `Idle`が作業を妨げない。
 - `Running`が弱く動く。
 - `NeedsAttention`が明確に目立つ。
-- `NeedsAttention`が時間経過で消えない。
+- 時刻がある`NeedsAttention`が1時間未満で保持される。
 - 次の`UserPromptSubmit`で`Running`へ戻る。
 - 2つ以上のセッションを同時に表示できる。
 - `NeedsAttention`、`Running`、`Idle`の順に並ぶ。
@@ -66,7 +70,9 @@ Hook設定とEnterlightなどの既存Hookは変更しません。
 - `Stop`で対象セッションが橙色になる。
 - `SessionEnd`で対象セッションがグレーになり、約240ms後に消える。
 - アーカイブ済みセッションが次のカタログ整理で消える。
-- 24時間未観測のセッションが5分周期の整理で消える。
+- 成功したカタログにない最近のセッションが次のカタログ整理で消える。
+- カタログに存在する1時間超過セッションが1分周期の整理で消える。
+- 時刻のない旧スナップショットのセッションが表示されない。
 - カタログ読み取り失敗時に既存セッションが保持される。
 - グレー表示中の`UserPromptSubmit`で対象セッションが青色へ戻る。
 - HUD再起動後に残りのセッションが復元する。

@@ -19,7 +19,7 @@ internal static class Program
             ("state store keeps independent sessions in stable priority order", TestMultipleSessions),
             ("session end shows idle grace and supports prompt cancellation", TestSessionEndGrace),
             ("session state snapshots restore active sessions and omit ended sessions", TestSessionStateSnapshot),
-            ("legacy session snapshots receive an observation baseline", TestLegacySessionSnapshot),
+            ("legacy session snapshots without timestamps are excluded", TestLegacySessionSnapshot),
             ("session catalog probe sanitizes IDs and marks archived sessions", TestSessionCatalogProbe),
             ("catalog read failure keeps saved sessions", TestCatalogReadFailure),
             ("session catalog cleanup removes archived and stale sessions", TestSessionCatalogCleanup),
@@ -274,10 +274,10 @@ internal static class Program
 
             using var store = new SessionStateStore(
                 new SessionStateSnapshotStore(path));
-            Assert.NotNull(store.CurrentSessions[0].LastObservedAtUtc);
+            Assert.Equal(0, store.CurrentSessions.Count);
             Assert.True(
-                File.ReadAllText(path).Contains("lastObservedAtUtc", StringComparison.Ordinal),
-                "Legacy snapshot was not migrated.");
+                File.ReadAllText(path).Trim() == "[]",
+                "Timestamp-less legacy session was not removed from the snapshot.");
             return Task.CompletedTask;
         }
         finally
@@ -375,6 +375,7 @@ internal static class Program
             const string recentSession = "session-recent";
             const string catalogNewerSession = "session-catalog-newer";
             const string unknownSession = "session-unknown-catalog";
+            const string absentRunningSession = "session-absent-running";
 
             store.Apply(new HookObservation(
                 HookEventKind.SessionStart,
@@ -383,49 +384,65 @@ internal static class Program
             store.Apply(new HookObservation(
                 HookEventKind.Stop,
                 staleSession,
-                now - TimeSpan.FromHours(25)));
+                now - TimeSpan.FromHours(1) - TimeSpan.FromMinutes(1)));
             store.Apply(new HookObservation(
                 HookEventKind.SessionStart,
                 recentSession,
-                now - TimeSpan.FromHours(23) - TimeSpan.FromMinutes(59)));
+                now - TimeSpan.FromMinutes(59)));
             store.Apply(new HookObservation(
                 HookEventKind.SessionStart,
                 catalogNewerSession,
-                now - TimeSpan.FromHours(48)));
+                now - TimeSpan.FromHours(2)));
             store.Apply(new HookObservation(
                 HookEventKind.PermissionRequest,
                 unknownSession,
-                now - TimeSpan.FromHours(25)));
+                now - TimeSpan.FromMinutes(1)));
+            store.Apply(new HookObservation(
+                HookEventKind.SessionStart,
+                absentRunningSession,
+                now - TimeSpan.FromMinutes(2)));
 
-            var removed = store.ReconcileCatalog(
-                new[]
-                {
-                    new SessionCatalogEntry(
-                        archivedSession,
-                        now - TimeSpan.FromHours(1),
-                        IsArchived: true),
-                    new SessionCatalogEntry(
-                        staleSession,
-                        now - TimeSpan.FromHours(25),
-                        IsArchived: false),
-                    new SessionCatalogEntry(
-                        recentSession,
-                        now - TimeSpan.FromHours(23) - TimeSpan.FromMinutes(59),
-                        IsArchived: false),
-                    new SessionCatalogEntry(
-                        catalogNewerSession,
-                        now - TimeSpan.FromHours(1),
-                        IsArchived: false)
-                },
-                now);
+            var catalogEntries = new[]
+            {
+                new SessionCatalogEntry(
+                    archivedSession,
+                    now - TimeSpan.FromHours(1),
+                    IsArchived: true),
+                new SessionCatalogEntry(
+                    staleSession,
+                    now - TimeSpan.FromHours(1) - TimeSpan.FromMinutes(1),
+                    IsArchived: false),
+                new SessionCatalogEntry(
+                    recentSession,
+                    now - TimeSpan.FromMinutes(59),
+                    IsArchived: false),
+                new SessionCatalogEntry(
+                    catalogNewerSession,
+                    now - TimeSpan.FromMinutes(30),
+                    IsArchived: false)
+            };
 
-            Assert.Equal(3, removed);
+            var removed = store.ReconcileCatalog(catalogEntries, now);
+
+            Assert.Equal(4, removed);
             Assert.Equal(2, store.CurrentSessions.Count);
             Assert.True(
                 store.CurrentSessions.All(session =>
                     session.SessionId == recentSession
                     || session.SessionId == catalogNewerSession),
                 "Unexpected sessions remained after catalog cleanup.");
+
+            store.Apply(new HookObservation(
+                HookEventKind.SessionStart,
+                unknownSession,
+                now));
+            Assert.True(
+                store.CurrentSessions.Any(session => session.SessionId == unknownSession),
+                "Hook did not recreate the catalog-absent session.");
+
+            var removedAfterHook = store.ReconcileCatalog(catalogEntries, now);
+            Assert.Equal(1, removedAfterHook);
+            Assert.Equal(2, store.CurrentSessions.Count);
             return Task.CompletedTask;
         });
     }
@@ -434,11 +451,11 @@ internal static class Program
     {
         return WithTestStore(store =>
         {
-            const string staleSession = "session-catalog-read-failure";
+            const string recentAbsentSession = "session-catalog-read-failure";
             store.Apply(new HookObservation(
                 HookEventKind.Stop,
-                staleSession,
-                DateTimeOffset.UtcNow - TimeSpan.FromHours(48)));
+                recentAbsentSession,
+                DateTimeOffset.UtcNow - TimeSpan.FromMinutes(1)));
 
             var missingCatalog = new CodexSessionCatalogProbe(
                 Path.Combine(Path.GetTempPath(), $"codex-hud-missing-catalog-{Guid.NewGuid():N}"));
@@ -446,7 +463,7 @@ internal static class Program
                 !missingCatalog.TryRead(out _),
                 "Missing catalog unexpectedly succeeded.");
             Assert.Equal(1, store.CurrentSessions.Count);
-            Assert.Equal(staleSession, store.CurrentSessions[0].SessionId);
+            Assert.Equal(recentAbsentSession, store.CurrentSessions[0].SessionId);
             return Task.CompletedTask;
         });
     }

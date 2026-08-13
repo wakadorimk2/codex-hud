@@ -6,7 +6,7 @@ namespace CodexHud;
 public partial class App : Application
 {
     private static readonly TimeSpan SessionCatalogCleanupInterval =
-        TimeSpan.FromMinutes(5);
+        TimeSpan.FromMinutes(1);
 
     private Mutex? _instanceMutex;
     private bool _ownsInstanceMutex;
