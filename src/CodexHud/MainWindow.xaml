@@ -1,9 +1,8 @@
 <Window x:Class="CodexHud.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:rendering="clr-namespace:CodexHud.Rendering"
-        Width="36"
-        Height="36"
+        Width="1"
+        Height="1"
         AllowsTransparency="True"
         Background="Transparent"
         ShowActivated="False"
@@ -12,15 +11,21 @@
         Topmost="True"
         WindowStyle="None">
     <Grid>
-        <rendering:SkiaLampView x:Name="LampSurface"
-                                HorizontalAlignment="Stretch"
-                                VerticalAlignment="Stretch" />
+        <Border x:Name="LampGroupSurface"
+                Background="Transparent"
+                HorizontalAlignment="Stretch"
+                VerticalAlignment="Stretch">
+            <WrapPanel x:Name="LampPanel"
+                       Orientation="Horizontal"
+                       HorizontalAlignment="Left"
+                       VerticalAlignment="Top" />
+        </Border>
         <Border x:Name="EditFrame"
                 Panel.ZIndex="1"
                 Background="Transparent"
                 BorderBrush="#FFF4F7FF"
                 BorderThickness="1"
-                CornerRadius="18"
+                CornerRadius="6"
                 Visibility="Collapsed" />
     </Grid>
 </Window>

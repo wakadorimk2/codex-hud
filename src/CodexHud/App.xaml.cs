@@ -45,8 +45,8 @@ public partial class App : Application
 
         _stateStore = new SessionStateStore();
         _window = new MainWindow();
-        _window.SetState(_stateStore.CurrentState);
-        _stateStore.StateChanged += OnStateChanged;
+        _window.SetSessions(_stateStore.CurrentSessions);
+        _stateStore.SessionsChanged += OnSessionsChanged;
 
         _stateServer = new NamedPipeStateServer(_stateStore.Apply);
         _stateServer.Start();
@@ -57,7 +57,13 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        if (_stateStore is not null)
+        {
+            _stateStore.SessionsChanged -= OnSessionsChanged;
+        }
+
         _stateServer?.Dispose();
+        _stateStore?.Dispose();
 
         if (_ownsInstanceMutex)
         {
@@ -68,7 +74,7 @@ public partial class App : Application
         base.OnExit(e);
     }
 
-    private void OnStateChanged(object? sender, StateChangedEventArgs e)
+    private void OnSessionsChanged(object? sender, SessionsChangedEventArgs e)
     {
         if (_window is null)
         {
@@ -76,6 +82,6 @@ public partial class App : Application
         }
 
         _ = _window.Dispatcher.BeginInvoke(
-            new Action(() => _window.SetState(e.CurrentState)));
+            new Action(() => _window.SetSessions(e.Sessions)));
     }
 }

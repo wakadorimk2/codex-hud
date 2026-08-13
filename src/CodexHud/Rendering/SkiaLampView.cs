@@ -24,6 +24,7 @@ public sealed class SkiaLampView : SKElement
         };
         _animationTimer.Tick += OnAnimationTick;
         PaintSurface += OnPaintSurface;
+        Loaded += OnLoaded;
         Unloaded += OnUnloaded;
     }
 
@@ -93,6 +94,12 @@ public sealed class SkiaLampView : SKElement
     private void OnUnloaded(object sender, System.Windows.RoutedEventArgs e)
     {
         _animationTimer.Stop();
+    }
+
+    private void OnLoaded(object sender, System.Windows.RoutedEventArgs e)
+    {
+        UpdateAnimationTimer();
+        InvalidateVisual();
     }
 
     private TimeSpan GetElapsedSinceStateChange()
