@@ -24,7 +24,7 @@ dotnet run --project .\tests\CodexHud.Tests\CodexHud.Tests.csproj -c Release
 python -m unittest discover -s experiments -p 'test_*.py'
 ```
 
-テストは、三状態の描画、可視ピクセル、Storeの状態遷移、Hook payloadの匿名化、Named Pipe、bridgeの終了コード、DPI配置を確認します。
+テストは、三状態の描画、可視ピクセル、Storeの状態遷移、Hook payloadの匿名化、Named Pipe、bridgeの終了コード、DPI配置、位置の永続化を確認します。
 
 ## Runtime modes
 
@@ -47,5 +47,15 @@ Pipe serverが停止していても、bridgeは終了コード0を返します�
 - HUDがフォーカスを奪わない。
 - Primary monitorの右下に約36 DIPで表示される。
 - 100%と150% DPIで位置とサイズが許容範囲になる。
+- `Ctrl + Alt + Shift + L`で位置編集モードへ切り替えられる。
+- 位置編集モードでランプをドラッグできる。
+- 同じホットキーで位置編集モードを終了できる。
+- 再起動後も保存した位置を復元する。
 
-複数モニター最適化、サウンド、粒子、3D、クリック操作は今回の対象外です。
+通常時のクリック透過は維持します。
+
+位置編集モードだけ、一時的にクリック透過を解除します。
+
+位置は`%LOCALAPPDATA%\CodexHud\position.json`へ保存します。
+
+複数モニター最適化、サウンド、粒子、3Dは今回の対象外です。

@@ -19,7 +19,8 @@ internal static class Program
             ("hook parser keeps raw payload out of the sanitized message", TestSanitization),
             ("pipe server and sender transfer sanitized state", TestPipeTransfer),
             ("bridge returns zero when the pipe is stopped", TestBridgeWhenPipeStopped),
-            ("lamp placement remains 36 DIP at 100 and 150 percent inputs", TestLampPlacement)
+            ("lamp placement remains 36 DIP at 100 and 150 percent inputs", TestLampPlacement),
+            ("lamp position persists and stays inside the work area", TestLampPositionStore)
         };
 
         var failures = 0;
@@ -158,6 +159,40 @@ internal static class Program
         Assert.Equal(1228d, at150.X);
         Assert.Equal(668d, at150.Y);
         return Task.CompletedTask;
+    }
+
+    private static Task TestLampPositionStore()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"codex-hud-test-{Guid.NewGuid():N}");
+        var path = Path.Combine(directory, "position.json");
+
+        try
+        {
+            var store = new LampPositionStore(path);
+            Assert.True(store.Load() is null, "Unexpected saved position.");
+            Assert.True(store.TrySave(new Point(120, 240)), "Position save failed.");
+
+            var loaded = store.Load();
+            Assert.NotNull(loaded);
+            Assert.Equal(120d, loaded!.Value.X);
+            Assert.Equal(240d, loaded.Value.Y);
+
+            var clamped = LampPlacement.Clamp(
+                new Rect(0, 0, 500, 400),
+                new Point(490, 390),
+                36,
+                36);
+            Assert.Equal(464d, clamped.X);
+            Assert.Equal(364d, clamped.Y);
+            return Task.CompletedTask;
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
     }
 
     private sealed class NoOpHudLauncher : IHudLauncher

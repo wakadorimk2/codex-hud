@@ -11,7 +11,13 @@
         ResizeMode="NoResize"
         Topmost="True"
         WindowStyle="None">
-    <rendering:SkiaLampView x:Name="LampSurface"
-                            HorizontalAlignment="Stretch"
-                            VerticalAlignment="Stretch" />
+    <Border x:Name="EditFrame"
+            BorderBrush="#FFF4F7FF"
+            BorderThickness="1"
+            CornerRadius="18"
+            Visibility="Collapsed">
+        <rendering:SkiaLampView x:Name="LampSurface"
+                                HorizontalAlignment="Stretch"
+                                VerticalAlignment="Stretch" />
+    </Border>
 </Window>
