@@ -136,6 +136,8 @@ Enterlightなど、一致しない既存Hookは保持します。
 
 `UserPromptSubmit`で青色の`Running`へ戻ることを確認します。
 
-`PermissionRequest`または`Stop`で橙色の`NeedsAttention`になることを確認します。
+`PermissionRequest`で橙色の`NeedsAttention`になることを確認します。
+
+`Stop`でグレーの静止表示になり、`NeedsAttention`の一覧優先度を維持することを確認します。
 
 Hook commandが利用できない場合も、bridgeは終了コード0を返します。

@@ -52,6 +52,7 @@ public sealed class SessionStateSnapshotStore
                     state.State,
                     state.FirstSeenOrder)
                 {
+                    Appearance = state.Appearance,
                     LastObservedAtUtc = state.LastObservedAtUtc
                 })
                 .ToArray();
@@ -77,7 +78,10 @@ public sealed class SessionStateSnapshotStore
                 state.SessionId,
                 state.State,
                 state.FirstSeenOrder,
-                state.LastObservedAtUtc)))
+                state.LastObservedAtUtc)
+            {
+                Appearance = state.Appearance
+            }))
             .Where(state => state.State != LampState.Idle)
             .GroupBy(state => state.SessionId, StringComparer.Ordinal)
             .Select(group => group
@@ -89,7 +93,10 @@ public sealed class SessionStateSnapshotStore
                 state.SessionId,
                 state.State,
                 state.FirstSeenOrder,
-                state.LastObservedAtUtc))
+                state.LastObservedAtUtc)
+            {
+                Appearance = state.Appearance
+            })
             .ToArray();
 
         try
@@ -120,7 +127,8 @@ public sealed class SessionStateSnapshotStore
         return !string.IsNullOrWhiteSpace(state.SessionId)
             && !string.Equals(state.SessionId, "session-unknown", StringComparison.Ordinal)
             && state.FirstSeenOrder > 0
-            && Enum.IsDefined(state.State);
+            && Enum.IsDefined(state.State)
+            && Enum.IsDefined(state.Appearance);
     }
 
     private static string GetDefaultPath()
@@ -134,5 +142,8 @@ public sealed class SessionStateSnapshotStore
         string SessionId,
         LampState State,
         long FirstSeenOrder,
-        DateTimeOffset? LastObservedAtUtc);
+        DateTimeOffset? LastObservedAtUtc)
+    {
+        public LampAppearance Appearance { get; init; } = LampAppearance.Default;
+    }
 }

@@ -5,5 +5,7 @@ public sealed record SessionLampState(
     LampState State,
     long FirstSeenOrder)
 {
+    public LampAppearance Appearance { get; init; } = LampAppearance.Default;
+
     public DateTimeOffset? LastObservedAtUtc { get; init; }
 }

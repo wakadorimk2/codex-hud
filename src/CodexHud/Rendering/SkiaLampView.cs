@@ -13,6 +13,8 @@ public sealed class SkiaLampView : SKElement
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private LampState _state = LampState.Idle;
     private LampState _fromState = LampState.Idle;
+    private LampAppearance _appearance = LampAppearance.Default;
+    private LampAppearance _fromAppearance = LampAppearance.Default;
     private long _stateChangedTimestamp;
 
     public SkiaLampView()
@@ -31,19 +33,29 @@ public sealed class SkiaLampView : SKElement
     public LampState State
     {
         get => _state;
-        set
-        {
-            if (_state == value)
-            {
-                return;
-            }
+        set => SetVisualState(value, _appearance);
+    }
 
-            _fromState = _state;
-            _state = value;
-            _stateChangedTimestamp = Stopwatch.GetTimestamp();
-            UpdateAnimationTimer();
-            InvalidateVisual();
+    public LampAppearance Appearance
+    {
+        get => _appearance;
+        set => SetVisualState(_state, value);
+    }
+
+    public void SetVisualState(LampState state, LampAppearance appearance)
+    {
+        if (_state == state && _appearance == appearance)
+        {
+            return;
         }
+
+        _fromState = _state;
+        _fromAppearance = _appearance;
+        _state = state;
+        _appearance = appearance;
+        _stateChangedTimestamp = Stopwatch.GetTimestamp();
+        UpdateAnimationTimer();
+        InvalidateVisual();
     }
 
     private void OnPaintSurface(object? sender, SKPaintSurfaceEventArgs e)
@@ -61,15 +73,19 @@ public sealed class SkiaLampView : SKElement
             e.Info.Height,
             _fromState,
             _state,
+            _fromAppearance,
+            _appearance,
             transitionProgress,
             phase);
     }
 
     private void OnAnimationTick(object? sender, EventArgs e)
     {
-        if (GetElapsedSinceStateChange().TotalSeconds >= 0.24 && _fromState != _state)
+        if (GetElapsedSinceStateChange().TotalSeconds >= 0.24
+            && (_fromState != _state || _fromAppearance != _appearance))
         {
             _fromState = _state;
+            _fromAppearance = _appearance;
         }
 
         UpdateAnimationTimer();
@@ -78,9 +94,13 @@ public sealed class SkiaLampView : SKElement
 
     private void UpdateAnimationTimer()
     {
-        var transitionActive = _fromState != _state
+        var transitionPending = _fromState != _state
+            || _fromAppearance != _appearance;
+        var transitionActive = transitionPending
             && GetElapsedSinceStateChange().TotalSeconds < 0.24;
-        if (_state == LampState.Idle && !transitionActive)
+        var continuousAnimationActive = _state != LampState.Idle
+            && _appearance != LampAppearance.Muted;
+        if (!transitionActive && !continuousAnimationActive)
         {
             _animationTimer.Stop();
             return;

@@ -113,6 +113,7 @@ public sealed class SessionStateStore : IDisposable
             return;
         }
 
+        var nextAppearance = MapAppearance(observation.Event);
         var observedAtUtc = observation.ObservedAtUtc.ToUniversalTime();
         LampState previousState;
         LampState currentState;
@@ -140,11 +141,13 @@ public sealed class SessionStateStore : IDisposable
                     : 1;
                 _removalGenerations[observation.SessionId] = removalGeneration;
 
-                if (existingSession.State != LampState.Idle)
+                if (existingSession.State != LampState.Idle
+                    || existingSession.Appearance != LampAppearance.Default)
                 {
                     _sessionStates[observation.SessionId] = existingSession with
                     {
                         State = LampState.Idle,
+                        Appearance = LampAppearance.Default,
                         LastObservedAtUtc = Max(
                             existingSession.LastObservedAtUtc,
                             observedAtUtc)
@@ -166,14 +169,17 @@ public sealed class SessionStateStore : IDisposable
                         existingSession.LastObservedAtUtc,
                         observedAtUtc);
                     if (existingSession.State != nextState.Value
+                        || existingSession.Appearance != nextAppearance
                         || existingSession.LastObservedAtUtc != lastObservedAtUtc)
                     {
                         _sessionStates[observation.SessionId] = existingSession with
                         {
                             State = nextState.Value,
+                            Appearance = nextAppearance,
                             LastObservedAtUtc = lastObservedAtUtc
                         };
-                        notifySessions = existingSession.State != nextState.Value;
+                        notifySessions = existingSession.State != nextState.Value
+                            || existingSession.Appearance != nextAppearance;
                     }
                 }
                 else
@@ -184,6 +190,7 @@ public sealed class SessionStateStore : IDisposable
                         ++_nextFirstSeenOrder);
                     session = session with
                     {
+                        Appearance = nextAppearance,
                         LastObservedAtUtc = observedAtUtc
                     };
                     _sessionStates.Add(observation.SessionId, session);
@@ -464,6 +471,13 @@ public sealed class SessionStateStore : IDisposable
             HookEventKind.SessionEnd => LampState.Idle,
             _ => null
         };
+    }
+
+    private static LampAppearance MapAppearance(HookEventKind eventKind)
+    {
+        return eventKind == HookEventKind.Stop
+            ? LampAppearance.Muted
+            : LampAppearance.Default;
     }
 }
 

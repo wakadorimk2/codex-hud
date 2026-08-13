@@ -14,12 +14,13 @@ internal static class Program
     {
         var tests = new (string Name, Func<Task> Run)[]
         {
-            ("renderer renders visible pixels for every state", TestRenderer),
+            ("renderer renders state and muted appearance correctly", TestRenderer),
             ("state store applies mappings and preserves unknown events", TestStateStore),
             ("state store keeps independent sessions in stable priority order", TestMultipleSessions),
             ("session end shows idle grace and supports prompt cancellation", TestSessionEndGrace),
             ("session state snapshots restore active sessions and omit ended sessions", TestSessionStateSnapshot),
             ("legacy session snapshots without timestamps are excluded", TestLegacySessionSnapshot),
+            ("legacy session snapshots default missing appearance", TestLegacySnapshotDefaultsAppearance),
             ("session catalog probe sanitizes IDs and marks archived sessions", TestSessionCatalogProbe),
             ("catalog read failure keeps saved sessions", TestCatalogReadFailure),
             ("session catalog cleanup removes archived and stale sessions", TestSessionCatalogCleanup),
@@ -57,7 +58,16 @@ internal static class Program
         {
             var imageInfo = new SKImageInfo(72, 72, SKColorType.Rgba8888, SKAlphaType.Premul);
             using var surface = SKSurface.Create(imageInfo);
-            renderer.Render(surface.Canvas, 72, 72, state, state, 1f, 0.35f);
+            renderer.Render(
+                surface.Canvas,
+                72,
+                72,
+                state,
+                state,
+                LampAppearance.Default,
+                LampAppearance.Default,
+                1f,
+                0.35f);
 
             using var bitmap = new SKBitmap(imageInfo);
             Assert.True(
@@ -79,6 +89,25 @@ internal static class Program
             Assert.True(hasVisiblePixel, $"No visible pixels for {state}.");
         }
 
+        using var idle = RenderBitmap(
+            renderer,
+            LampState.Idle,
+            LampAppearance.Default,
+            0.35f);
+        using var muted = RenderBitmap(
+            renderer,
+            LampState.NeedsAttention,
+            LampAppearance.Muted,
+            0.35f);
+        using var mutedLater = RenderBitmap(
+            renderer,
+            LampState.NeedsAttention,
+            LampAppearance.Muted,
+            1.35f);
+
+        Assert.True(AreBitmapsEqual(idle, muted), "Muted Stop did not use the Idle gray appearance.");
+        Assert.True(AreBitmapsEqual(muted, mutedLater), "Muted Stop is not static.");
+
         return Task.CompletedTask;
     }
 
@@ -96,17 +125,25 @@ internal static class Program
 
             store.Apply(new HookObservation(HookEventKind.PermissionRequest, sessionId, secondObservedAtUtc));
             Assert.Equal(LampState.NeedsAttention, store.CurrentState);
+            Assert.Equal(LampAppearance.Default, store.CurrentSessions[0].Appearance);
             Assert.Equal(secondObservedAtUtc, store.CurrentSessions[0].LastObservedAtUtc);
+
+            store.Apply(new HookObservation(HookEventKind.Stop, sessionId, secondObservedAtUtc.AddMinutes(1)));
+            Assert.Equal(LampState.NeedsAttention, store.CurrentState);
+            Assert.Equal(LampAppearance.Muted, store.CurrentSessions[0].Appearance);
 
             store.Apply(new HookObservation(HookEventKind.Unknown, sessionId, DateTimeOffset.UtcNow));
             Assert.Equal(LampState.NeedsAttention, store.CurrentState);
+            Assert.Equal(LampAppearance.Muted, store.CurrentSessions[0].Appearance);
 
             store.Apply(new HookObservation(HookEventKind.UserPromptSubmit, sessionId, DateTimeOffset.UtcNow));
             Assert.Equal(LampState.Running, store.CurrentState);
+            Assert.Equal(LampAppearance.Default, store.CurrentSessions[0].Appearance);
 
             store.Apply(new HookObservation(HookEventKind.SessionEnd, sessionId, DateTimeOffset.UtcNow));
             Assert.Equal(LampState.Idle, store.CurrentState);
             Assert.Equal(LampState.Idle, store.CurrentSessions[0].State);
+            Assert.Equal(LampAppearance.Default, store.CurrentSessions[0].Appearance);
             return Task.CompletedTask;
         });
     }
@@ -138,6 +175,7 @@ internal static class Program
             var attentionFirst = store.CurrentSessions;
             Assert.Equal(secondSession, attentionFirst[0].SessionId);
             Assert.Equal(LampState.NeedsAttention, attentionFirst[0].State);
+            Assert.Equal(LampAppearance.Muted, attentionFirst[0].Appearance);
             Assert.Equal(firstSession, attentionFirst[1].SessionId);
 
             store.Apply(new HookObservation(
@@ -151,6 +189,9 @@ internal static class Program
             var stableRunningOrder = store.CurrentSessions;
             Assert.Equal(firstSession, stableRunningOrder[0].SessionId);
             Assert.Equal(secondSession, stableRunningOrder[1].SessionId);
+            Assert.True(
+                stableRunningOrder.All(session => session.Appearance == LampAppearance.Default),
+                "Running sessions did not return to the default appearance.");
 
             store.Apply(new HookObservation(
                 HookEventKind.Unknown,
@@ -233,6 +274,7 @@ internal static class Program
                 Assert.Equal(2, restored.Count);
                 Assert.Equal(attentionSession, restored[0].SessionId);
                 Assert.Equal(LampState.NeedsAttention, restored[0].State);
+                Assert.Equal(LampAppearance.Muted, restored[0].Appearance);
                 Assert.Equal(runningSession, restored[1].SessionId);
 
                 restoredStore.Apply(new HookObservation(
@@ -278,6 +320,37 @@ internal static class Program
             Assert.True(
                 File.ReadAllText(path).Trim() == "[]",
                 "Timestamp-less legacy session was not removed from the snapshot.");
+            return Task.CompletedTask;
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    private static Task TestLegacySnapshotDefaultsAppearance()
+    {
+        var directory = Path.Combine(
+            Path.GetTempPath(),
+            $"codex-hud-legacy-appearance-{Guid.NewGuid():N}");
+        var path = Path.Combine(directory, "sessions.json");
+
+        try
+        {
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(
+                path,
+                "[{\"sessionId\":\"session-legacy-appearance\",\"state\":\"NeedsAttention\",\"firstSeenOrder\":1,\"lastObservedAtUtc\":\"2026-08-13T08:00:00Z\"}]");
+
+            using var store = new SessionStateStore(
+                new SessionStateSnapshotStore(path));
+            Assert.Equal(1, store.CurrentSessions.Count);
+            Assert.Equal(
+                LampAppearance.Default,
+                store.CurrentSessions[0].Appearance);
             return Task.CompletedTask;
         }
         finally
@@ -511,6 +584,7 @@ internal static class Program
                 await Task.Delay(10);
             }
             Assert.Equal(LampState.NeedsAttention, store.CurrentState);
+            Assert.Equal(LampAppearance.Muted, store.CurrentSessions[0].Appearance);
         });
     }
 
@@ -632,6 +706,48 @@ internal static class Program
                 Directory.Delete(directory, recursive: true);
             }
         }
+    }
+
+    private static SKBitmap RenderBitmap(
+        SkiaLampRenderer renderer,
+        LampState state,
+        LampAppearance appearance,
+        float phase)
+    {
+        var imageInfo = new SKImageInfo(72, 72, SKColorType.Rgba8888, SKAlphaType.Premul);
+        using var surface = SKSurface.Create(imageInfo);
+        renderer.Render(
+            surface.Canvas,
+            72,
+            72,
+            state,
+            state,
+            appearance,
+            appearance,
+            1f,
+            phase);
+
+        var bitmap = new SKBitmap(imageInfo);
+        Assert.True(
+            surface.ReadPixels(bitmap.Info, bitmap.GetPixels(), bitmap.RowBytes, 0, 0),
+            $"ReadPixels failed for {state}/{appearance}.");
+        return bitmap;
+    }
+
+    private static bool AreBitmapsEqual(SKBitmap first, SKBitmap second)
+    {
+        for (var y = 0; y < first.Height; y++)
+        {
+            for (var x = 0; x < first.Width; x++)
+            {
+                if (first.GetPixel(x, y) != second.GetPixel(x, y))
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
     }
 
     private static async Task WaitUntil(Func<bool> condition, TimeSpan timeout)

@@ -24,7 +24,7 @@ dotnet run --project .\tests\CodexHud.Tests\CodexHud.Tests.csproj -c Release
 python -m unittest discover -s experiments -p 'test_*.py'
 ```
 
-テストは、三状態の描画、可視ピクセル、複数セッションの独立遷移、状態優先順、`SessionEnd`の猶予と削除中止、状態スナップショットの復元、時刻なし旧スナップショットの除外、セッションカタログの匿名化とアーカイブ照合、1時間整理、Hook payloadの匿名化、Named Pipe、bridgeの終了コード、DPI配置、折返し、位置の永続化を確認します。
+テストは、三状態と表示属性の描画、可視ピクセル、複数セッションの独立遷移、状態優先順、`SessionEnd`の猶予と削除中止、状態スナップショットの復元、時刻なし旧スナップショットの除外、表示属性なし旧スナップショットの復元、セッションカタログの匿名化とアーカイブ照合、1時間整理、Hook payloadの匿名化、Named Pipe、bridgeの終了コード、DPI配置、折返し、位置の永続化を確認します。
 
 ## Runtime modes
 
@@ -67,7 +67,9 @@ Hook設定とEnterlightなどの既存Hookは変更しません。
 - `NeedsAttention`、`Running`、`Idle`の順に並ぶ。
 - 同じ状態の順序が初回観測順で安定する。
 - 画面幅を超えたランプが次の行へ折り返す。
-- `Stop`で対象セッションが橙色になる。
+- `PermissionRequest`で対象セッションが橙色で脈動する。
+- `Stop`で対象セッションがグレーで静止する。
+- `Stop`が`NeedsAttention`の一覧優先度を維持する。
 - `SessionEnd`で対象セッションがグレーになり、約240ms後に消える。
 - アーカイブ済みセッションが次のカタログ整理で消える。
 - 成功したカタログにない最近のセッションが次のカタログ整理で消える。

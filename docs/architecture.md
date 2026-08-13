@@ -83,7 +83,7 @@ prompt、command、tool input、cwd、生のHook JSONはNamed Pipeへ渡しま�
 
 HUDはStoreのセッション一覧だけを読み取ります。
 
-`SessionLampState`は、匿名化済みセッションID、ランプ状態、初回観測順、最終Hook観測日時を保持します。
+`SessionLampState`は、匿名化済みセッションID、ランプ状態、表示属性、初回観測順、最終Hook観測日時を保持します。
 
 HUDは生のHook payload、prompt、command、tool input、cwdを受け取りません。
 
@@ -113,12 +113,19 @@ HUDはCodexプロセスを監視しません。
 
 この実装のランプは、研究用の六状態モデルを三状態へ投影します。
 
-| Hook event | Lamp state |
-| --- | --- |
-| `SessionStart`、`UserPromptSubmit` | `Running` |
-| `PermissionRequest`、`Stop` | `NeedsAttention` |
-| `SessionEnd` | `Idle` |
-| malformed、unknown | 現在状態を維持 |
+| Hook event | Lamp state | Appearance |
+| --- | --- | --- |
+| `SessionStart`、`UserPromptSubmit` | `Running` | `Default` |
+| `PermissionRequest` | `NeedsAttention` | `Default` |
+| `Stop` | `NeedsAttention` | `Muted` |
+| `SessionEnd` | `Idle` | `Default` |
+| malformed、unknown | 現在状態を維持 | 現在属性を維持 |
+
+`LampState`は状態と一覧優先度を表します。
+
+`LampAppearance`は表示方法を表します。
+
+`Stop`は`NeedsAttention`の優先度を維持し、`Muted`で暗いグレーの静止表示にします。
 
 複数セッションがある場合、Storeは`NeedsAttention`、`Running`、`Idle`の順で一覧を返します。
 
@@ -140,7 +147,7 @@ HUDはCodexプロセスを監視しません。
 
 カタログに存在するセッションの1時間超過による自動整理は、状態解除ではなくHUD一覧からの削除です。
 
-次の`UserPromptSubmit`または`SessionStart`で、そのセッションを`Running`へ戻します。
+次の`UserPromptSubmit`または`SessionStart`で、そのセッションを`Running`と`Default`へ戻します。
 
 ### 正規化された観測
 

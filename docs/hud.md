@@ -181,6 +181,10 @@ Primary monitorの作業領域幅を超える場合は、次の行へ折り返�
 
 猶予中に`UserPromptSubmit`を受けた場合は、削除せずに青色へ戻します。
 
+`Stop`のランプはカタログ整理または次の状態更新まで一覧に残ります。
+
+`Stop`のランプは暗いグレーで静止します。
+
 UIシェルはWPFです。
 
 描画面は`SkiaSharp.Views.WPF`の`SKElement`です。
@@ -193,11 +197,13 @@ UIシェルはWPFです。
 
 `Running`は青色で弱く呼吸します。
 
-`NeedsAttention`は橙色で強く発光し、緩く脈動します。
+`Default`の`NeedsAttention`は橙色で強く発光し、緩く脈動します。
+
+`Stop`の`Muted`表示は暗いグレーで静止し、残光リングを表示しません。
 
 `NeedsAttention`は点滅で解除しません。
 
-状態変更時だけ色遷移を行います。
+状態または表示属性の変更時だけ色遷移を行います。
 
 アニメーション中だけ描画更新を行います。
 
@@ -219,11 +225,13 @@ UIシェルはWPFです。
 
 セッション状態は`%LOCALAPPDATA%\CodexHud\sessions.json`へ保存します。
 
-保存する値は、匿名化済みセッションID、ランプ状態、初回観測順だけです。
+保存する値は、匿名化済みセッションID、ランプ状態、表示属性、初回観測順、最終Hook観測日時です。
 
 `SessionEnd`の一時的な`Idle`状態は保存しません。
 
 HUD再起動時は、最終観測日時がある保存済みの`Running`と`NeedsAttention`を復元します。
+
+表示属性がない旧スナップショットは`Default`として復元します。
 
 保存位置がない場合は、Primary monitorの右下へ16 DIPの余白を付けて配置します。
 
