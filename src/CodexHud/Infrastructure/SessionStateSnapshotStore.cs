@@ -11,6 +11,7 @@ public sealed class SessionStateSnapshotStore
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         WriteIndented = true,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
         Converters = { new JsonStringEnumConverter() }
     };
 
@@ -49,7 +50,10 @@ public sealed class SessionStateSnapshotStore
                 .Select(state => new SessionLampState(
                     state.SessionId,
                     state.State,
-                    state.FirstSeenOrder))
+                    state.FirstSeenOrder)
+                {
+                    LastObservedAtUtc = state.LastObservedAtUtc
+                })
                 .ToArray();
         }
         catch (IOException)
@@ -72,7 +76,8 @@ public sealed class SessionStateSnapshotStore
             .Where(state => IsValid(new PersistedSessionState(
                 state.SessionId,
                 state.State,
-                state.FirstSeenOrder)))
+                state.FirstSeenOrder,
+                state.LastObservedAtUtc)))
             .Where(state => state.State != LampState.Idle)
             .GroupBy(state => state.SessionId, StringComparer.Ordinal)
             .Select(group => group
@@ -83,7 +88,8 @@ public sealed class SessionStateSnapshotStore
             .Select(state => new PersistedSessionState(
                 state.SessionId,
                 state.State,
-                state.FirstSeenOrder))
+                state.FirstSeenOrder,
+                state.LastObservedAtUtc))
             .ToArray();
 
         try
@@ -127,5 +133,6 @@ public sealed class SessionStateSnapshotStore
     private sealed record PersistedSessionState(
         string SessionId,
         LampState State,
-        long FirstSeenOrder);
+        long FirstSeenOrder,
+        DateTimeOffset? LastObservedAtUtc);
 }

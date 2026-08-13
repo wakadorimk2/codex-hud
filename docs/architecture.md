@@ -83,13 +83,25 @@ prompt、command、tool input、cwd、生のHook JSONはNamed Pipeへ渡しま�
 
 HUDはStoreのセッション一覧だけを読み取ります。
 
-`SessionLampState`は、匿名化済みセッションID、ランプ状態、初回観測順を保持します。
+`SessionLampState`は、匿名化済みセッションID、ランプ状態、初回観測順、最終Hook観測日時を保持します。
 
 HUDは生のHook payload、prompt、command、tool input、cwdを受け取りません。
 
 Named Pipeが停止しても、Hook bridgeは終了コード0を返します。
 
 `SessionStart`だけが、必要な場合にHUDプロセスを起動します。
+
+`CodexSessionCatalogProbe`は、`session_index.jsonl`と`archived_sessions`を読み取ります。
+
+Probeは、セッションIDを匿名化し、最終更新時刻とアーカイブ状態だけをStoreへ渡します。
+
+Probeは、Codexの履歴ファイルを変更しません。
+
+Storeは、アーカイブ済みセッションをHUDの一覧から削除します。
+
+Storeは、最終Hook観測またはカタログ最終更新から24時間以上経過したセッションを削除します。
+
+カタログを読み取れない場合、Storeはその周期の自動削除を実行しません。
 
 HUDはCodexプロセスを監視しません。
 
@@ -116,9 +128,11 @@ HUDはCodexプロセスを監視しません。
 
 `SessionEnd`の一時的な`Idle`状態は保存しません。
 
-実環境で`SessionEnd`が届かない場合、時間経過でセッションを削除しません。
+実環境で`SessionEnd`が届かない場合も、Session Catalog Cleanupは別の期限判定を行います。
 
-`NeedsAttention`は時間経過で解除しません。
+`NeedsAttention`は通常の状態更新では時間経過で解除しません。
+
+24時間超過による自動整理は、状態解除ではなくHUD一覧からの削除です。
 
 次の`UserPromptSubmit`または`SessionStart`で、そのセッションを`Running`へ戻します。
 

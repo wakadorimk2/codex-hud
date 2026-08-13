@@ -6,6 +6,8 @@ public sealed class SessionStateStore : IDisposable
 {
     private static readonly TimeSpan DefaultSessionEndGrace =
         TimeSpan.FromMilliseconds(240);
+    private static readonly TimeSpan DefaultSessionCleanupAge =
+        TimeSpan.FromHours(24);
 
     private readonly object _gate = new();
     private readonly Dictionary<string, SessionLampState> _sessionStates = new(StringComparer.Ordinal);
@@ -28,6 +30,8 @@ public sealed class SessionStateStore : IDisposable
         }
 
         var restoredSessions = _snapshotStore.Load();
+        var legacyObservedAtUtc = DateTimeOffset.UtcNow;
+        var hasLegacySessions = false;
         foreach (var session in restoredSessions)
         {
             if (session.State == LampState.Idle
@@ -42,8 +46,25 @@ public sealed class SessionStateStore : IDisposable
                 continue;
             }
 
-            _sessionStates.Add(session.SessionId, session);
-            _nextFirstSeenOrder = Math.Max(_nextFirstSeenOrder, session.FirstSeenOrder);
+            var restoredSession = session;
+            if (!restoredSession.LastObservedAtUtc.HasValue)
+            {
+                restoredSession = restoredSession with
+                {
+                    LastObservedAtUtc = legacyObservedAtUtc
+                };
+                hasLegacySessions = true;
+            }
+
+            _sessionStates.Add(restoredSession.SessionId, restoredSession);
+            _nextFirstSeenOrder = Math.Max(
+                _nextFirstSeenOrder,
+                restoredSession.FirstSeenOrder);
+        }
+
+        if (hasLegacySessions)
+        {
+            _snapshotStore.TrySave(_sessionStates.Values);
         }
     }
 
@@ -97,6 +118,7 @@ public sealed class SessionStateStore : IDisposable
             return;
         }
 
+        var observedAtUtc = observation.ObservedAtUtc.ToUniversalTime();
         LampState previousState;
         LampState currentState;
         IReadOnlyList<SessionLampState>? sessions = null;
@@ -127,7 +149,10 @@ public sealed class SessionStateStore : IDisposable
                 {
                     _sessionStates[observation.SessionId] = existingSession with
                     {
-                        State = LampState.Idle
+                        State = LampState.Idle,
+                        LastObservedAtUtc = Max(
+                            existingSession.LastObservedAtUtc,
+                            observedAtUtc)
                     };
                     notifySessions = true;
                 }
@@ -142,13 +167,18 @@ public sealed class SessionStateStore : IDisposable
 
                 if (_sessionStates.TryGetValue(observation.SessionId, out var existingSession))
                 {
-                    if (existingSession.State != nextState.Value)
+                    var lastObservedAtUtc = Max(
+                        existingSession.LastObservedAtUtc,
+                        observedAtUtc);
+                    if (existingSession.State != nextState.Value
+                        || existingSession.LastObservedAtUtc != lastObservedAtUtc)
                     {
                         _sessionStates[observation.SessionId] = existingSession with
                         {
-                            State = nextState.Value
+                            State = nextState.Value,
+                            LastObservedAtUtc = lastObservedAtUtc
                         };
-                        notifySessions = true;
+                        notifySessions = existingSession.State != nextState.Value;
                     }
                 }
                 else
@@ -157,6 +187,10 @@ public sealed class SessionStateStore : IDisposable
                         observation.SessionId,
                         nextState.Value,
                         ++_nextFirstSeenOrder);
+                    session = session with
+                    {
+                        LastObservedAtUtc = observedAtUtc
+                    };
                     _sessionStates.Add(observation.SessionId, session);
                     notifySessions = true;
                 }
@@ -185,6 +219,64 @@ public sealed class SessionStateStore : IDisposable
                 observation.SessionId,
                 removalGeneration);
         }
+    }
+
+    public int ReconcileCatalog(
+        IEnumerable<SessionCatalogEntry> catalogEntries,
+        DateTimeOffset nowUtc,
+        TimeSpan? cleanupAge = null)
+    {
+        if (_disposed)
+        {
+            return 0;
+        }
+
+        var maxAge = cleanupAge ?? DefaultSessionCleanupAge;
+        if (maxAge < TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(cleanupAge));
+        }
+
+        var catalog = CreateCatalogMap(catalogEntries);
+        nowUtc = nowUtc.ToUniversalTime();
+
+        LampState previousState;
+        LampState currentState;
+        IReadOnlyList<SessionLampState> sessions;
+        var removedCount = 0;
+
+        lock (_gate)
+        {
+            previousState = GetAggregateState();
+
+            foreach (var session in _sessionStates.Values.ToArray())
+            {
+                if (!ShouldRemove(
+                        session,
+                        catalog,
+                        nowUtc,
+                        maxAge))
+                {
+                    continue;
+                }
+
+                _sessionStates.Remove(session.SessionId);
+                _removalGenerations.Remove(session.SessionId);
+                removedCount++;
+            }
+
+            if (removedCount == 0)
+            {
+                return 0;
+            }
+
+            currentState = GetAggregateState();
+            sessions = CreateSnapshot();
+        }
+
+        _snapshotStore.TrySave(sessions);
+        RaiseChanges(previousState, currentState, sessions, notifySessions: true);
+        return removedCount;
     }
 
     public void Dispose()
@@ -293,6 +385,72 @@ public sealed class SessionStateStore : IDisposable
         }
 
         return LampState.Idle;
+    }
+
+    private static Dictionary<string, SessionCatalogEntry> CreateCatalogMap(
+        IEnumerable<SessionCatalogEntry> catalogEntries)
+    {
+        var catalog = new Dictionary<string, SessionCatalogEntry>(StringComparer.Ordinal);
+        foreach (var entry in catalogEntries)
+        {
+            if (string.IsNullOrWhiteSpace(entry.SessionId))
+            {
+                continue;
+            }
+
+            if (catalog.TryGetValue(entry.SessionId, out var existing))
+            {
+                catalog[entry.SessionId] = existing with
+                {
+                    LastUpdatedAtUtc = Max(
+                        existing.LastUpdatedAtUtc,
+                        entry.LastUpdatedAtUtc),
+                    IsArchived = existing.IsArchived || entry.IsArchived
+                };
+            }
+            else
+            {
+                catalog.Add(entry.SessionId, entry);
+            }
+        }
+
+        return catalog;
+    }
+
+    private static bool ShouldRemove(
+        SessionLampState session,
+        IReadOnlyDictionary<string, SessionCatalogEntry> catalog,
+        DateTimeOffset nowUtc,
+        TimeSpan maxAge)
+    {
+        catalog.TryGetValue(session.SessionId, out var catalogEntry);
+        if (catalogEntry?.IsArchived == true)
+        {
+            return true;
+        }
+
+        var lastActivityAtUtc = Max(
+            session.LastObservedAtUtc,
+            catalogEntry?.LastUpdatedAtUtc);
+        return lastActivityAtUtc.HasValue
+            && nowUtc - lastActivityAtUtc.Value >= maxAge;
+    }
+
+    private static DateTimeOffset? Max(
+        DateTimeOffset? first,
+        DateTimeOffset? second)
+    {
+        if (!first.HasValue)
+        {
+            return second;
+        }
+
+        if (!second.HasValue)
+        {
+            return first;
+        }
+
+        return first.Value >= second.Value ? first : second;
     }
 
     private static LampState? MapEvent(HookEventKind eventKind)

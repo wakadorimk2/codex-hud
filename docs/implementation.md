@@ -24,7 +24,7 @@ dotnet run --project .\tests\CodexHud.Tests\CodexHud.Tests.csproj -c Release
 python -m unittest discover -s experiments -p 'test_*.py'
 ```
 
-テストは、三状態の描画、可視ピクセル、複数セッションの独立遷移、状態優先順、`SessionEnd`の猶予と削除中止、状態スナップショットの復元、Hook payloadの匿名化、Named Pipe、bridgeの終了コード、DPI配置、折返し、位置の永続化を確認します。
+テストは、三状態の描画、可視ピクセル、複数セッションの独立遷移、状態優先順、`SessionEnd`の猶予と削除中止、状態スナップショットの復元、旧スナップショットの日時移行、セッションカタログの匿名化とアーカイブ照合、24時間整理、Hook payloadの匿名化、Named Pipe、bridgeの終了コード、DPI配置、折返し、位置の永続化を確認します。
 
 ## Runtime modes
 
@@ -40,7 +40,15 @@ HUD起動時は`%LOCALAPPDATA%\CodexHud\sessions.json`から`Running`と`NeedsAt
 
 `SessionEnd`を受けたセッションは約240msだけ`Idle`で表示し、その後に削除します。
 
-`SessionEnd`が届かない場合、時間経過でセッションを削除しません。
+HUD起動時にセッションカタログを一回読み取り、アーカイブ済みセッションを削除します。
+
+HUDは5分ごとにセッションカタログを読み取ります。
+
+最終Hook観測またはカタログ最終更新から24時間以上経過したセッションを削除します。
+
+カタログを読み取れない場合、その周期の自動削除を実行しません。
+
+旧スナップショットに最終観測日時がない場合、初回起動時刻を移行時の基準にします。
 
 Hook設定とEnterlightなどの既存Hookは変更しません。
 
@@ -57,6 +65,9 @@ Hook設定とEnterlightなどの既存Hookは変更しません。
 - 画面幅を超えたランプが次の行へ折り返す。
 - `Stop`で対象セッションが橙色になる。
 - `SessionEnd`で対象セッションがグレーになり、約240ms後に消える。
+- アーカイブ済みセッションが次のカタログ整理で消える。
+- 24時間未観測のセッションが5分周期の整理で消える。
+- カタログ読み取り失敗時に既存セッションが保持される。
 - グレー表示中の`UserPromptSubmit`で対象セッションが青色へ戻る。
 - HUD再起動後に残りのセッションが復元する。
 - ランプがクリックを透過する。

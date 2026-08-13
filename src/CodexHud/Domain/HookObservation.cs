@@ -111,7 +111,7 @@ public static class HookObservationParser
             : HookEventKind.Unknown;
     }
 
-    private static string HashSessionId(string? sessionId)
+    internal static string HashSessionId(string? sessionId)
     {
         if (string.IsNullOrWhiteSpace(sessionId))
         {

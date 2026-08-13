@@ -19,6 +19,10 @@ internal static class Program
             ("state store keeps independent sessions in stable priority order", TestMultipleSessions),
             ("session end shows idle grace and supports prompt cancellation", TestSessionEndGrace),
             ("session state snapshots restore active sessions and omit ended sessions", TestSessionStateSnapshot),
+            ("legacy session snapshots receive an observation baseline", TestLegacySessionSnapshot),
+            ("session catalog probe sanitizes IDs and marks archived sessions", TestSessionCatalogProbe),
+            ("catalog read failure keeps saved sessions", TestCatalogReadFailure),
+            ("session catalog cleanup removes archived and stale sessions", TestSessionCatalogCleanup),
             ("hook parser keeps raw payload out of the sanitized message", TestSanitization),
             ("pipe server and sender transfer sanitized state", TestPipeTransfer),
             ("bridge returns zero when the pipe is stopped", TestBridgeWhenPipeStopped),
@@ -83,12 +87,16 @@ internal static class Program
         return WithTestStore(store =>
         {
             const string sessionId = "session-test";
+            var firstObservedAtUtc = DateTimeOffset.Parse("2026-08-13T08:00:00Z");
+            var secondObservedAtUtc = DateTimeOffset.Parse("2026-08-13T09:00:00Z");
 
-            store.Apply(new HookObservation(HookEventKind.SessionStart, sessionId, DateTimeOffset.UtcNow));
+            store.Apply(new HookObservation(HookEventKind.SessionStart, sessionId, firstObservedAtUtc));
             Assert.Equal(LampState.Running, store.CurrentState);
+            Assert.Equal(firstObservedAtUtc, store.CurrentSessions[0].LastObservedAtUtc);
 
-            store.Apply(new HookObservation(HookEventKind.PermissionRequest, sessionId, DateTimeOffset.UtcNow));
+            store.Apply(new HookObservation(HookEventKind.PermissionRequest, sessionId, secondObservedAtUtc));
             Assert.Equal(LampState.NeedsAttention, store.CurrentState);
+            Assert.Equal(secondObservedAtUtc, store.CurrentSessions[0].LastObservedAtUtc);
 
             store.Apply(new HookObservation(HookEventKind.Unknown, sessionId, DateTimeOffset.UtcNow));
             Assert.Equal(LampState.NeedsAttention, store.CurrentState);
@@ -250,6 +258,199 @@ internal static class Program
         }
     }
 
+    private static Task TestLegacySessionSnapshot()
+    {
+        var directory = Path.Combine(
+            Path.GetTempPath(),
+            $"codex-hud-legacy-snapshot-{Guid.NewGuid():N}");
+        var path = Path.Combine(directory, "sessions.json");
+
+        try
+        {
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(
+                path,
+                "[{\"sessionId\":\"session-legacy\",\"state\":\"Running\",\"firstSeenOrder\":1}]");
+
+            using var store = new SessionStateStore(
+                new SessionStateSnapshotStore(path));
+            Assert.NotNull(store.CurrentSessions[0].LastObservedAtUtc);
+            Assert.True(
+                File.ReadAllText(path).Contains("lastObservedAtUtc", StringComparison.Ordinal),
+                "Legacy snapshot was not migrated.");
+            return Task.CompletedTask;
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    private static Task TestSessionCatalogProbe()
+    {
+        var directory = Path.Combine(
+            Path.GetTempPath(),
+            $"codex-hud-catalog-{Guid.NewGuid():N}");
+        var archiveDirectory = Path.Combine(directory, "archived_sessions");
+        var indexPath = Path.Combine(directory, "session_index.jsonl");
+        const string archivedRawId = "11111111-1111-1111-1111-111111111111";
+        const string activeRawId = "22222222-2222-2222-2222-222222222222";
+
+        try
+        {
+            Directory.CreateDirectory(archiveDirectory);
+            File.WriteAllText(
+                indexPath,
+                string.Join(
+                    Environment.NewLine,
+                    JsonSerializer.Serialize(new
+                    {
+                        id = archivedRawId,
+                        thread_name = "private thread",
+                        updated_at = "2026-08-13T08:00:00Z"
+                    }),
+                    JsonSerializer.Serialize(new
+                    {
+                        id = activeRawId,
+                        thread_name = "active thread",
+                        updated_at = "2026-08-13T09:00:00Z"
+                    })));
+            File.WriteAllText(
+                Path.Combine(
+                    archiveDirectory,
+                    $"rollout-2026-08-13T00-00-00-{archivedRawId}.jsonl"),
+                string.Empty);
+
+            var probe = new CodexSessionCatalogProbe(directory);
+            Assert.True(probe.TryRead(out var entries), "Catalog probe failed.");
+            Assert.Equal(2, entries.Count);
+
+            var archivedSessionId = HashSessionIdForTest(archivedRawId);
+            var activeSessionId = HashSessionIdForTest(activeRawId);
+            var archived = entries.Single(entry => entry.SessionId == archivedSessionId);
+            var active = entries.Single(entry => entry.SessionId == activeSessionId);
+
+            Assert.True(archived.IsArchived, "Archived session was not marked.");
+            Assert.True(!active.IsArchived, "Active session was marked archived.");
+            Assert.Equal(
+                DateTimeOffset.Parse("2026-08-13T08:00:00Z"),
+                archived.LastUpdatedAtUtc);
+            Assert.Equal(
+                DateTimeOffset.Parse("2026-08-13T09:00:00Z"),
+                active.LastUpdatedAtUtc);
+
+            var sanitized = JsonSerializer.Serialize(entries);
+            Assert.True(
+                !sanitized.Contains(archivedRawId, StringComparison.Ordinal),
+                "Archived raw session ID crossed the catalog boundary.");
+            Assert.True(
+                !sanitized.Contains(activeRawId, StringComparison.Ordinal),
+                "Active raw session ID crossed the catalog boundary.");
+            Assert.True(
+                !new CodexSessionCatalogProbe(
+                    Path.Combine(directory, "missing"))
+                    .TryRead(out _),
+                "Missing catalog unexpectedly succeeded.");
+            return Task.CompletedTask;
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    private static Task TestSessionCatalogCleanup()
+    {
+        return WithTestStore(store =>
+        {
+            var now = DateTimeOffset.Parse("2026-08-13T12:00:00Z");
+            const string archivedSession = "session-archived";
+            const string staleSession = "session-stale";
+            const string recentSession = "session-recent";
+            const string catalogNewerSession = "session-catalog-newer";
+            const string unknownSession = "session-unknown-catalog";
+
+            store.Apply(new HookObservation(
+                HookEventKind.SessionStart,
+                archivedSession,
+                now - TimeSpan.FromHours(1)));
+            store.Apply(new HookObservation(
+                HookEventKind.Stop,
+                staleSession,
+                now - TimeSpan.FromHours(25)));
+            store.Apply(new HookObservation(
+                HookEventKind.SessionStart,
+                recentSession,
+                now - TimeSpan.FromHours(23) - TimeSpan.FromMinutes(59)));
+            store.Apply(new HookObservation(
+                HookEventKind.SessionStart,
+                catalogNewerSession,
+                now - TimeSpan.FromHours(48)));
+            store.Apply(new HookObservation(
+                HookEventKind.PermissionRequest,
+                unknownSession,
+                now - TimeSpan.FromHours(25)));
+
+            var removed = store.ReconcileCatalog(
+                new[]
+                {
+                    new SessionCatalogEntry(
+                        archivedSession,
+                        now - TimeSpan.FromHours(1),
+                        IsArchived: true),
+                    new SessionCatalogEntry(
+                        staleSession,
+                        now - TimeSpan.FromHours(25),
+                        IsArchived: false),
+                    new SessionCatalogEntry(
+                        recentSession,
+                        now - TimeSpan.FromHours(23) - TimeSpan.FromMinutes(59),
+                        IsArchived: false),
+                    new SessionCatalogEntry(
+                        catalogNewerSession,
+                        now - TimeSpan.FromHours(1),
+                        IsArchived: false)
+                },
+                now);
+
+            Assert.Equal(3, removed);
+            Assert.Equal(2, store.CurrentSessions.Count);
+            Assert.True(
+                store.CurrentSessions.All(session =>
+                    session.SessionId == recentSession
+                    || session.SessionId == catalogNewerSession),
+                "Unexpected sessions remained after catalog cleanup.");
+            return Task.CompletedTask;
+        });
+    }
+
+    private static Task TestCatalogReadFailure()
+    {
+        return WithTestStore(store =>
+        {
+            const string staleSession = "session-catalog-read-failure";
+            store.Apply(new HookObservation(
+                HookEventKind.Stop,
+                staleSession,
+                DateTimeOffset.UtcNow - TimeSpan.FromHours(48)));
+
+            var missingCatalog = new CodexSessionCatalogProbe(
+                Path.Combine(Path.GetTempPath(), $"codex-hud-missing-catalog-{Guid.NewGuid():N}"));
+            Assert.True(
+                !missingCatalog.TryRead(out _),
+                "Missing catalog unexpectedly succeeded.");
+            Assert.Equal(1, store.CurrentSessions.Count);
+            Assert.Equal(staleSession, store.CurrentSessions[0].SessionId);
+            return Task.CompletedTask;
+        });
+    }
+
     private static Task TestSanitization()
     {
         const string secretPrompt = "private prompt must not cross the bridge";
@@ -375,6 +576,20 @@ internal static class Program
         {
             return Task.CompletedTask;
         }
+    }
+
+    private static string HashSessionIdForTest(string rawSessionId)
+    {
+        var payload = JsonSerializer.Serialize(new
+        {
+            hook_event_name = "SessionStart",
+            session_id = rawSessionId
+        });
+        Assert.True(
+            HookObservationParser.TryParseHookPayload(payload, out var observation),
+            "Could not hash a test session ID.");
+        Assert.NotNull(observation);
+        return observation!.SessionId;
     }
 
     private static async Task WithTestStore(
