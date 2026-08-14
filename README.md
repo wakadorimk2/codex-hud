@@ -4,9 +4,20 @@ Codexの現在状態を、画面端に小さく持続表示するWindows HUDで�
 
 Codex Desktopを別の作業と並行して使うときに、実行中、要対応、停止中のセッションを見失わないことを目的にします。
 
-<p align="center">
-  <img src="docs/assets/codex-hud-lamps.png" alt="Codex HUDの状態ランプ表示例">
-</p>
+<table align="center">
+  <tr>
+    <td align="center">
+      <img src="docs/assets/codex-hud-lamps.png" alt="Codex HUDの複数セッション混在表示例">
+      <br>
+      <sub>複数セッションの混在表示</sub>
+    </td>
+    <td align="center">
+      <img src="docs/assets/codex-hud-lamps-running-stop.png" alt="Codex HUDのRunningとStopの表示例">
+      <br>
+      <sub>Running / Stop の表示例</sub>
+    </td>
+  </tr>
+</table>
 
 ## Features
 
