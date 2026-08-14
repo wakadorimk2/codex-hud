@@ -1,6 +1,7 @@
 using System.IO;
 using System.IO.Pipes;
 using System.Text;
+using System.Threading;
 using CodexHud.Domain;
 
 namespace CodexHud.Infrastructure;
@@ -12,6 +13,11 @@ public interface IHookMessageTransport
 
 public sealed class NamedPipeStateSender : IHookMessageTransport
 {
+    private static readonly TimeSpan SessionStartConnectTimeout =
+        TimeSpan.FromMilliseconds(1500);
+    private static readonly TimeSpan ConnectRetryDelay =
+        TimeSpan.FromMilliseconds(25);
+
     private readonly string _pipeName;
     private readonly TimeSpan _connectTimeout;
 
@@ -27,23 +33,107 @@ public sealed class NamedPipeStateSender : IHookMessageTransport
         HookObservation observation,
         CancellationToken cancellationToken = default)
     {
+        var deadline = DateTimeOffset.UtcNow
+            + (observation.Event == HookEventKind.SessionStart
+                ? SessionStartConnectTimeout
+                : _connectTimeout);
+
         try
         {
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeout.CancelAfter(_connectTimeout);
+            while (true)
+            {
+                var remaining = deadline - DateTimeOffset.UtcNow;
+                if (remaining <= TimeSpan.Zero)
+                {
+                    return false;
+                }
 
-            await using var client = new NamedPipeClientStream(
-                ".",
-                _pipeName,
-                PipeDirection.Out,
-                PipeOptions.Asynchronous);
-            await client.ConnectAsync(timeout.Token).ConfigureAwait(false);
+                await using var client = new NamedPipeClientStream(
+                    ".",
+                    _pipeName,
+                    PipeDirection.Out,
+                    PipeOptions.Asynchronous);
 
-            var message = HookObservationParser.SerializeTransportMessage(observation) + Environment.NewLine;
-            var bytes = Encoding.UTF8.GetBytes(message);
-            await client.WriteAsync(bytes, timeout.Token).ConfigureAwait(false);
-            await client.FlushAsync(timeout.Token).ConfigureAwait(false);
-            return true;
+                try
+                {
+                    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(
+                        cancellationToken);
+                    timeout.CancelAfter(remaining);
+                    await client.ConnectAsync(timeout.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    if (!await WaitBeforeConnectRetryAsync(deadline, cancellationToken)
+                            .ConfigureAwait(false))
+                    {
+                        return false;
+                    }
+
+                    continue;
+                }
+                catch (TimeoutException)
+                {
+                    if (!await WaitBeforeConnectRetryAsync(deadline, cancellationToken)
+                            .ConfigureAwait(false))
+                    {
+                        return false;
+                    }
+
+                    continue;
+                }
+                catch (IOException)
+                {
+                    if (!await WaitBeforeConnectRetryAsync(deadline, cancellationToken)
+                            .ConfigureAwait(false))
+                    {
+                        return false;
+                    }
+
+                    continue;
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    if (!await WaitBeforeConnectRetryAsync(deadline, cancellationToken)
+                            .ConfigureAwait(false))
+                    {
+                        return false;
+                    }
+
+                    continue;
+                }
+
+                try
+                {
+                    remaining = deadline - DateTimeOffset.UtcNow;
+                    if (remaining <= TimeSpan.Zero)
+                    {
+                        return false;
+                    }
+
+                    using var sendTimeout = CancellationTokenSource.CreateLinkedTokenSource(
+                        cancellationToken);
+                    sendTimeout.CancelAfter(remaining);
+
+                    var message = HookObservationParser.SerializeTransportMessage(observation)
+                        + Environment.NewLine;
+                    var bytes = Encoding.UTF8.GetBytes(message);
+                    await client.WriteAsync(bytes, sendTimeout.Token).ConfigureAwait(false);
+                    await client.FlushAsync(sendTimeout.Token).ConfigureAwait(false);
+                    return true;
+                }
+                catch (OperationCanceledException)
+                {
+                    return false;
+                }
+                catch (IOException)
+                {
+                    return false;
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    return false;
+                }
+            }
         }
         catch (OperationCanceledException)
         {
@@ -57,6 +147,22 @@ public sealed class NamedPipeStateSender : IHookMessageTransport
         {
             return false;
         }
+    }
+
+    private static async Task<bool> WaitBeforeConnectRetryAsync(
+        DateTimeOffset deadline,
+        CancellationToken cancellationToken)
+    {
+        var remaining = deadline - DateTimeOffset.UtcNow;
+        if (remaining <= TimeSpan.Zero)
+        {
+            return false;
+        }
+
+        await Task.Delay(
+            remaining < ConnectRetryDelay ? remaining : ConnectRetryDelay,
+            cancellationToken).ConfigureAwait(false);
+        return DateTimeOffset.UtcNow < deadline;
     }
 }
 

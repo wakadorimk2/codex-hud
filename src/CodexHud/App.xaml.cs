@@ -51,7 +51,6 @@ public partial class App : Application
 
         _stateStore = new SessionStateStore();
         _catalogProbe = new CodexSessionCatalogProbe();
-        ReconcileSessionCatalog();
 
         _window = new MainWindow();
         _window.SetSessions(_stateStore.CurrentSessions);
@@ -66,6 +65,8 @@ public partial class App : Application
 
         MainWindow = _window;
         _window.Show();
+
+        _ = Task.Run(ReconcileSessionCatalog);
     }
 
     protected override void OnExit(ExitEventArgs e)

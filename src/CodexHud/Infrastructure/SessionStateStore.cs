@@ -204,16 +204,16 @@ public sealed class SessionStateStore : IDisposable
             currentState = GetAggregateState();
         }
 
-        if (persistSessions)
-        {
-            _snapshotStore.TrySave(sessions!);
-        }
-
         RaiseChanges(
             previousState,
             currentState,
             sessions!,
             notifySessions);
+
+        if (persistSessions)
+        {
+            _snapshotStore.TrySave(sessions!);
+        }
 
         if (scheduleRemoval)
         {
@@ -276,8 +276,8 @@ public sealed class SessionStateStore : IDisposable
             sessions = CreateSnapshot();
         }
 
-        _snapshotStore.TrySave(sessions);
         RaiseChanges(previousState, currentState, sessions, notifySessions: true);
+        _snapshotStore.TrySave(sessions);
         return removedCount;
     }
 
@@ -330,8 +330,8 @@ public sealed class SessionStateStore : IDisposable
             sessions = CreateSnapshot();
         }
 
-        _snapshotStore.TrySave(sessions);
         RaiseChanges(previousState, currentState, sessions, notifySessions: true);
+        _snapshotStore.TrySave(sessions);
     }
 
     private void RaiseChanges(
@@ -427,11 +427,6 @@ public sealed class SessionStateStore : IDisposable
     {
         catalog.TryGetValue(session.SessionId, out var catalogEntry);
         if (catalogEntry?.IsArchived == true)
-        {
-            return true;
-        }
-
-        if (catalogEntry is null)
         {
             return true;
         }

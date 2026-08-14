@@ -26,6 +26,7 @@ internal static class Program
             ("session catalog cleanup removes archived and stale sessions", TestSessionCatalogCleanup),
             ("hook parser keeps raw payload out of the sanitized message", TestSanitization),
             ("pipe server and sender transfer sanitized state", TestPipeTransfer),
+            ("pipe sender retries before a late HUD server starts", TestPipeSenderRetries),
             ("bridge returns zero when the pipe is stopped", TestBridgeWhenPipeStopped),
             ("lamp placement remains 36 DIP at 100 and 150 percent inputs", TestLampPlacement),
             ("lamp group layout keeps 36 DIP cells and wraps at work area width", TestLampGroupLayout),
@@ -162,6 +163,10 @@ internal static class Program
             store.Apply(new HookObservation(
                 HookEventKind.SessionStart,
                 secondSession,
+                DateTimeOffset.UtcNow));
+            store.Apply(new HookObservation(
+                HookEventKind.SessionStart,
+                firstSession,
                 DateTimeOffset.UtcNow));
 
             Assert.Equal(2, store.CurrentSessions.Count);
@@ -390,6 +395,12 @@ internal static class Program
                         id = activeRawId,
                         thread_name = "active thread",
                         updated_at = "2026-08-13T09:00:00Z"
+                    }),
+                    JsonSerializer.Serialize(new
+                    {
+                        id = activeRawId,
+                        thread_name = "duplicate active thread",
+                        updated_at = "2026-08-13T08:30:00Z"
                     })));
             File.WriteAllText(
                 Path.Combine(
@@ -449,6 +460,7 @@ internal static class Program
             const string catalogNewerSession = "session-catalog-newer";
             const string unknownSession = "session-unknown-catalog";
             const string absentRunningSession = "session-absent-running";
+            const string absentStaleSession = "session-absent-stale";
 
             store.Apply(new HookObservation(
                 HookEventKind.SessionStart,
@@ -474,6 +486,10 @@ internal static class Program
                 HookEventKind.SessionStart,
                 absentRunningSession,
                 now - TimeSpan.FromMinutes(2)));
+            store.Apply(new HookObservation(
+                HookEventKind.SessionStart,
+                absentStaleSession,
+                now - TimeSpan.FromHours(1) - TimeSpan.FromMinutes(2)));
 
             var catalogEntries = new[]
             {
@@ -497,12 +513,14 @@ internal static class Program
 
             var removed = store.ReconcileCatalog(catalogEntries, now);
 
-            Assert.Equal(4, removed);
-            Assert.Equal(2, store.CurrentSessions.Count);
+            Assert.Equal(3, removed);
+            Assert.Equal(4, store.CurrentSessions.Count);
             Assert.True(
                 store.CurrentSessions.All(session =>
                     session.SessionId == recentSession
-                    || session.SessionId == catalogNewerSession),
+                    || session.SessionId == catalogNewerSession
+                    || session.SessionId == unknownSession
+                    || session.SessionId == absentRunningSession),
                 "Unexpected sessions remained after catalog cleanup.");
 
             store.Apply(new HookObservation(
@@ -514,8 +532,8 @@ internal static class Program
                 "Hook did not recreate the catalog-absent session.");
 
             var removedAfterHook = store.ReconcileCatalog(catalogEntries, now);
-            Assert.Equal(1, removedAfterHook);
-            Assert.Equal(2, store.CurrentSessions.Count);
+            Assert.Equal(0, removedAfterHook);
+            Assert.Equal(4, store.CurrentSessions.Count);
             return Task.CompletedTask;
         });
     }
@@ -586,6 +604,38 @@ internal static class Program
             Assert.Equal(LampState.NeedsAttention, store.CurrentState);
             Assert.Equal(LampAppearance.Muted, store.CurrentSessions[0].Appearance);
         });
+    }
+
+    private static async Task TestPipeSenderRetries()
+    {
+        var pipeName = $"codex-hud-late-server-{Guid.NewGuid():N}";
+        var received = new TaskCompletionSource<HookObservation>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        using var server = new NamedPipeStateServer(
+            observation => received.TrySetResult(observation),
+            pipeName);
+        var delayedStart = Task.Run(async () =>
+        {
+            await Task.Delay(100);
+            server.Start();
+        });
+
+        var sender = new NamedPipeStateSender(pipeName, TimeSpan.FromMilliseconds(250));
+        var sent = await sender.SendAsync(
+            new HookObservation(
+                HookEventKind.SessionStart,
+                "session-late-server",
+                DateTimeOffset.UtcNow));
+
+        await delayedStart;
+        Assert.True(sent, "Named Pipe send did not retry until the late server started.");
+        await WaitUntil(
+            () => received.Task.IsCompleted,
+            TimeSpan.FromSeconds(1));
+        var observation = await received.Task;
+        Assert.Equal(HookEventKind.SessionStart, observation.Event);
+        Assert.Equal("session-late-server", observation.SessionId);
     }
 
     private static async Task TestBridgeWhenPipeStopped()
