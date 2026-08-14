@@ -1,4 +1,5 @@
 using System.Windows;
+using CodexHud.Domain;
 using CodexHud.Infrastructure;
 
 namespace CodexHud;
@@ -15,6 +16,7 @@ public partial class App : Application
     private CodexSessionCatalogProbe? _catalogProbe;
     private CancellationTokenSource? _catalogCleanupShutdown;
     private Task? _catalogCleanupTask;
+    private SessionCatalogReconciliationQueue? _catalogReconciliationQueue;
     private MainWindow? _window;
 
     protected override void OnStartup(StartupEventArgs e)
@@ -56,17 +58,19 @@ public partial class App : Application
         _window.SetSessions(_stateStore.CurrentSessions);
         _stateStore.SessionsChanged += OnSessionsChanged;
 
-        _stateServer = new NamedPipeStateServer(_stateStore.Apply);
+        _stateServer = new NamedPipeStateServer(HandleHookObservation);
         _stateServer.Start();
 
         _catalogCleanupShutdown = new CancellationTokenSource();
+        _catalogReconciliationQueue = new SessionCatalogReconciliationQueue(
+            ReconcileSessionCatalog);
         _catalogCleanupTask = RunSessionCatalogCleanupAsync(
             _catalogCleanupShutdown.Token);
 
         MainWindow = _window;
         _window.Show();
 
-        _ = Task.Run(ReconcileSessionCatalog);
+        RequestSessionCatalogReconciliation();
     }
 
     protected override void OnExit(ExitEventArgs e)
@@ -80,6 +84,9 @@ public partial class App : Application
         try
         {
             _catalogCleanupTask?.GetAwaiter().GetResult();
+
+            _stateServer?.Dispose();
+            _catalogReconciliationQueue?.Dispose();
         }
         catch (OperationCanceledException)
         {
@@ -92,9 +99,9 @@ public partial class App : Application
             _catalogCleanupShutdown?.Dispose();
             _catalogCleanupShutdown = null;
             _catalogCleanupTask = null;
+            _catalogReconciliationQueue = null;
         }
 
-        _stateServer?.Dispose();
         _stateStore?.Dispose();
 
         if (_ownsInstanceMutex)
@@ -117,6 +124,22 @@ public partial class App : Application
             new Action(() => _window.SetSessions(e.Sessions)));
     }
 
+    private void HandleHookObservation(HookObservation observation)
+    {
+        if (_stateStore is null)
+        {
+            return;
+        }
+
+        _stateStore.Apply(observation);
+        RequestSessionCatalogReconciliation();
+    }
+
+    private void RequestSessionCatalogReconciliation()
+    {
+        _catalogReconciliationQueue?.Request();
+    }
+
     private void ReconcileSessionCatalog()
     {
         if (_stateStore is null
@@ -137,7 +160,7 @@ public partial class App : Application
             while (await timer.WaitForNextTickAsync(cancellationToken)
                        .ConfigureAwait(false))
             {
-                ReconcileSessionCatalog();
+                RequestSessionCatalogReconciliation();
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

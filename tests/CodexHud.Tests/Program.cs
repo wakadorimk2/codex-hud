@@ -24,6 +24,7 @@ internal static class Program
             ("session catalog probe sanitizes IDs and marks archived sessions", TestSessionCatalogProbe),
             ("catalog read failure keeps saved sessions", TestCatalogReadFailure),
             ("session catalog cleanup removes archived and stale sessions", TestSessionCatalogCleanup),
+            ("session catalog reconciliation requests are serialized and coalesced", TestSessionCatalogReconciliationQueue),
             ("hook parser keeps raw payload out of the sanitized message", TestSanitization),
             ("pipe server and sender transfer sanitized state", TestPipeTransfer),
             ("pipe sender retries before a late HUD server starts", TestPipeSenderRetries),
@@ -557,6 +558,64 @@ internal static class Program
             Assert.Equal(recentAbsentSession, store.CurrentSessions[0].SessionId);
             return Task.CompletedTask;
         });
+    }
+
+    private static async Task TestSessionCatalogReconciliationQueue()
+    {
+        var firstStarted = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirst = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var runCount = 0;
+        var activeCount = 0;
+        var maximumActiveCount = 0;
+
+        using var queue = new SessionCatalogReconciliationQueue(() =>
+        {
+            var active = Interlocked.Increment(ref activeCount);
+            Interlocked.Exchange(ref maximumActiveCount, Math.Max(
+                Volatile.Read(ref maximumActiveCount),
+                active));
+
+            var run = Interlocked.Increment(ref runCount);
+            if (run == 1)
+            {
+                firstStarted.TrySetResult(true);
+                releaseFirst.Task.GetAwaiter().GetResult();
+            }
+            else
+            {
+                Thread.Sleep(20);
+            }
+
+            Interlocked.Decrement(ref activeCount);
+        });
+
+        try
+        {
+            queue.Request();
+            await WaitUntil(
+                () => firstStarted.Task.IsCompleted,
+                TimeSpan.FromSeconds(1));
+
+            for (var index = 0; index < 20; index++)
+            {
+                queue.Request();
+            }
+
+            releaseFirst.TrySetResult(true);
+            await WaitUntil(
+                () => Volatile.Read(ref runCount) == 2,
+                TimeSpan.FromSeconds(1));
+            await Task.Delay(50);
+
+            Assert.Equal(2, runCount);
+            Assert.Equal(1, maximumActiveCount);
+        }
+        finally
+        {
+            releaseFirst.TrySetResult(true);
+        }
     }
 
     private static Task TestSanitization()
