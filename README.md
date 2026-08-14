@@ -60,8 +60,17 @@ Codex Hook
 
 ### Requirements
 
+For development:
+
 - Windows
 - .NET 10 SDK
+
+For the release ZIP:
+
+- Windows x64
+- .NET 10 Desktop Runtime
+
+The release ZIP is framework-dependent. It does not include the .NET runtime.
 
 ### Build and run
 
