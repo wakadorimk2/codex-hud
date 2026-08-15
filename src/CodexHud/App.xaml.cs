@@ -115,13 +115,15 @@ public partial class App : Application
 
     private void OnSessionsChanged(object? sender, SessionsChangedEventArgs e)
     {
-        if (_window is null)
+        var window = _window;
+        var stateStore = _stateStore;
+        if (window is null || stateStore is null)
         {
             return;
         }
 
-        _ = _window.Dispatcher.BeginInvoke(
-            new Action(() => _window.SetSessions(e.Sessions)));
+        _ = window.Dispatcher.BeginInvoke(
+            new Action(() => window.SetSessions(stateStore.CurrentSessions)));
     }
 
     private void HandleHookObservation(HookObservation observation)
