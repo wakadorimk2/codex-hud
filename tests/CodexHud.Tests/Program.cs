@@ -474,7 +474,7 @@ internal static class Program
             store.Apply(new HookObservation(
                 HookEventKind.SessionStart,
                 recentSession,
-                now - TimeSpan.FromMinutes(59)));
+                now - TimeSpan.FromMinutes(4)));
             store.Apply(new HookObservation(
                 HookEventKind.SessionStart,
                 catalogNewerSession,
@@ -490,7 +490,7 @@ internal static class Program
             store.Apply(new HookObservation(
                 HookEventKind.SessionStart,
                 absentStaleSession,
-                now - TimeSpan.FromHours(1) - TimeSpan.FromMinutes(2)));
+                now - TimeSpan.FromMinutes(6)));
 
             var catalogEntries = new[]
             {
@@ -504,11 +504,11 @@ internal static class Program
                     IsArchived: false),
                 new SessionCatalogEntry(
                     recentSession,
-                    now - TimeSpan.FromMinutes(59),
+                    now - TimeSpan.FromMinutes(4),
                     IsArchived: false),
                 new SessionCatalogEntry(
                     catalogNewerSession,
-                    now - TimeSpan.FromMinutes(30),
+                    now - TimeSpan.FromMinutes(3),
                     IsArchived: false)
             };
 

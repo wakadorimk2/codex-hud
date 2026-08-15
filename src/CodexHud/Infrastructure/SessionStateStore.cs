@@ -7,7 +7,7 @@ public sealed class SessionStateStore : IDisposable
     private static readonly TimeSpan DefaultSessionEndGrace =
         TimeSpan.FromMilliseconds(240);
     private static readonly TimeSpan DefaultSessionCleanupAge =
-        TimeSpan.FromHours(1);
+        TimeSpan.FromMinutes(5);
 
     private readonly object _gate = new();
     private readonly Dictionary<string, SessionLampState> _sessionStates = new(StringComparer.Ordinal);

@@ -164,8 +164,55 @@ public sealed class CodexSessionCatalogProbe
 
     private static string GetDefaultCodexDirectory()
     {
-        var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        return Path.Combine(userProfile, ".codex");
+        var candidates = new List<string>();
+        AddCandidate(candidates, Environment.GetEnvironmentVariable("CODEX_HOME"));
+        AddUserProfileCandidate(
+            candidates,
+            Environment.GetEnvironmentVariable("USERPROFILE"));
+        AddUserProfileCandidate(
+            candidates,
+            Environment.GetEnvironmentVariable("HOME"));
+        AddUserProfileCandidate(
+            candidates,
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+
+        var existingCatalog = candidates.FirstOrDefault(HasCatalogData);
+        return existingCatalog
+            ?? candidates.FirstOrDefault()
+            ?? Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".codex");
+    }
+
+    private static void AddUserProfileCandidate(
+        ICollection<string> candidates,
+        string? userProfile)
+    {
+        if (string.IsNullOrWhiteSpace(userProfile))
+        {
+            return;
+        }
+
+        AddCandidate(candidates, Path.Combine(userProfile, ".codex"));
+    }
+
+    private static void AddCandidate(
+        ICollection<string> candidates,
+        string? candidate)
+    {
+        if (string.IsNullOrWhiteSpace(candidate)
+            || candidates.Contains(candidate, StringComparer.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        candidates.Add(candidate);
+    }
+
+    private static bool HasCatalogData(string directory)
+    {
+        return File.Exists(Path.Combine(directory, "session_index.jsonl"))
+            || Directory.Exists(Path.Combine(directory, "archived_sessions"));
     }
 
     private sealed class SessionIndexRecord
