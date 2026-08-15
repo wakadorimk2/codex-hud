@@ -9,7 +9,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>CodexHud</AssemblyName>
     <RootNamespace>CodexHud</RootNamespace>
-    <Version>0.1.1</Version>
+    <Version>0.1.2</Version>
     <Platforms>AnyCPU</Platforms>
   </PropertyGroup>
 
