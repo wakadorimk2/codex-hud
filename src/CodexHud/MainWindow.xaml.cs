@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using CodexHud.Domain;
 using CodexHud.Infrastructure;
 using CodexHud.Rendering;
+using Point = System.Windows.Point;
 
 namespace CodexHud;
 
@@ -108,6 +109,27 @@ public partial class MainWindow : Window
         position = LampPlacement.Clamp(SystemParameters.WorkArea, position, Width, Height);
         Left = position.X;
         Top = position.Y;
+    }
+
+    internal void ToggleVisibilityFromTray()
+    {
+        if (IsVisible)
+        {
+            Hide();
+            return;
+        }
+
+        Show();
+    }
+
+    internal void TogglePositionEditingFromTray()
+    {
+        if (!IsVisible)
+        {
+            Show();
+        }
+
+        TogglePositionEditing();
     }
 
     private void TogglePositionEditing()

@@ -25,6 +25,8 @@ Codex Desktopを別の作業と並行して使うときに、実行中、要対�
 - セッションごとに状態ランプを表示します。
 - `Running`、`NeedsAttention`、`Idle`を視覚的に区別します。
 - `Stop`は、要対応状態を保ったまま、暗いグレーで表示します。
+- タスクトレイからHUDの表示、位置編集、終了を操作できます。
+- タスクトレイのツールチップに、起動状態とセッション状態の件数を表示します。
 - HUDはCodexを操作しません。
 - Hookの生データ、prompt、command、tool input、cwdをHUDへ渡しません。
 - ランプは通常時にクリックを透過します。
@@ -44,6 +46,10 @@ Codex Hook
 ```
 
 現在の実装は、`net10.0-windows`、WPF、SkiaSharp、Windows Named Pipeを使用します。
+
+通常起動時は、タスクバーにボタンを表示せず、タスクトレイへアイコンを表示します。
+
+タスクトレイからHUDを非表示にしても、Named PipeとSession State Storeは動作を続けます。
 
 ## Current verification
 
@@ -121,6 +127,7 @@ bridgeは、許可されたイベント名と匿名化済みセッション識�
 - Session State Storeが現在状態の正を保持します。
 - HUDはCodex固有のファイル形式やHook JSONを直接解釈しません。
 - HUDから承認、回答入力、turn操作を実行しません。
+- タスクトレイからCodexの承認、回答入力、turn操作を実行しません。
 - 無更新、プロセス終了、ウィンドウ非表示だけで`Completed`や`Error`へ遷移しません。
 - 複数モニター最適化、サウンド、粒子、3Dは現在の対象外です。
 

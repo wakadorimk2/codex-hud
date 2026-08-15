@@ -50,7 +50,7 @@ HUD
 | Codex | 既存のセッション実行、turn実行、ユーザー対話 | HUDのために利用方法を変えない |
 | Codex State Probe / Monitor | `.codex`、App Server、CLIなどのCodex固有情報源を観測する | UIを描画しない。Codexをラップまたは操作しない |
 | Session State Store | セッションごとの現在状態、状態遷移、判断根拠を保持する | 情報源ごとのファイル形式を直接解釈しない |
-| HUD | Storeの現在状態をPassive modeまたはExpanded modeで表示する | Codex固有情報源を直接参照しない |
+| HUD | Storeの現在状態をPassive modeまたはExpanded modeで表示し、タスクトレイからHUDの表示を制御する | Codex固有情報源を直接参照しない。Codexを操作しない |
 | Visual notification | 状態に応じて視覚的な注意度を変える | 現在状態を変更しない |
 | Sound notification | 将来、状態遷移時に補助通知を出す | 繰り返し音や操作を妨げる音を既定にしない |
 | Window focus | 将来、ユーザーのクリックで対象ウィンドウへ移動する | ユーザー操作なしにフォーカスを奪わない |

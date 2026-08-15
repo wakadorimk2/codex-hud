@@ -1,6 +1,7 @@
 using System.IO;
 using System.Text.Json;
 using System.Windows;
+using Point = System.Windows.Point;
 
 namespace CodexHud.Infrastructure;
 

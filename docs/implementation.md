@@ -4,6 +4,7 @@
 
 - Target Framework: `net10.0-windows`
 - UI shell: WPF
+- Task tray: Windows Forms `NotifyIcon`
 - Rendering: SkiaSharp 4.150.1
 - WPF integration: SkiaSharp.Views.WPF 4.150.1
 - Windows native assets: SkiaSharp.NativeAssets.Win32 4.150.1
@@ -29,6 +30,12 @@ python -m unittest discover -s experiments -p 'test_*.py'
 ## Runtime modes
 
 引数なしで起動すると、HUDとNamed Pipe serverを起動します。
+
+通常起動時は、タスクバーにボタンを表示せず、タスクトレイにHUDアイコンを表示します。
+
+タスクトレイからHUDを表示、非表示、位置編集、終了できます。
+
+HUDを非表示にしても、Named Pipe、Session State Store、Hook受信は継続します。
 
 `--hook`で起動すると、標準入力をsanitized messageへ変換してNamed Pipeへ送信し、終了します。
 
@@ -105,6 +112,16 @@ Hook設定とEnterlightなどの既存Hookは変更しません。
 - 位置編集モードでグループ全体をドラッグできる。
 - 同じホットキーで位置編集モードを終了できる。
 - 再起動後も保存した位置を復元する。
+- HUD起動後にタスクトレイアイコンが表示される。
+- タスクバーにHUDのボタンが表示されない。
+- トレイメニューからHUDの表示と非表示を切り替えられる。
+- トレイメニューから位置編集モードを切り替えられる。
+- トレイメニューのツールチップに起動状態と`NeedsAttention`、`Running`、`Idle`の件数が表示される。
+- HUDを非表示にしても、Hook状態とツールチップの件数が更新される。
+- トレイメニューの`終了`でアイコンとHUDプロセスが終了する。
+- 次の`SessionStart`でHUDとトレイアイコンが再表示される。
+- 連続した`SessionStart`でトレイアイコンが重複しない。
+- `--hook`起動でトレイアイコンが残らない。
 
 通常時のクリック透過は維持します。
 
