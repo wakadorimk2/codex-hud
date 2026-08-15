@@ -27,6 +27,7 @@ Codex Desktopを別の作業と並行して使うときに、実行中、要対�
 - `Stop`は、要対応状態を保ったまま、暗いグレーで表示します。
 - タスクトレイからHUDの表示、位置編集、終了を操作できます。
 - タスクトレイのツールチップに、起動状態とセッション状態の件数を表示します。
+- EXEとタスクトレイに、青い専用HUDアイコンを表示します。
 - HUDはCodexを操作しません。
 - Hookの生データ、prompt、command、tool input、cwdをHUDへ渡しません。
 - ランプは通常時にクリックを透過します。
@@ -46,6 +47,8 @@ Codex Hook
 ```
 
 現在の実装は、`net10.0-windows`、WPF、SkiaSharp、Windows Named Pipeを使用します。
+
+アプリケーションアイコンは[`src/CodexHud/Assets/CodexHud.ico`](src/CodexHud/Assets/CodexHud.ico)を使用します。
 
 通常起動時は、タスクバーにボタンを表示せず、タスクトレイへアイコンを表示します。
 
@@ -88,6 +91,21 @@ dotnet run --project .\src\CodexHud\CodexHud.csproj -c Release
 ```
 
 引数なしで起動すると、HUDとNamed Pipe serverを起動します。
+
+### Start menu shortcut
+
+Release EXEをbuildした後に、一度だけ実行します。
+
+```powershell
+dotnet build .\src\CodexHud\CodexHud.csproj -c Release
+pwsh -NoProfile -File .\tools\install-start-menu-shortcut.ps1
+```
+
+以後は、Windowsのスタートメニューから`Codex HUD`を起動します。
+
+リポジトリを移動した場合は、同じスクリプトを再実行してショートカットを更新します。
+
+Windowsログイン時の自動起動は設定しません。
 
 ### Tests
 

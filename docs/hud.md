@@ -132,6 +132,12 @@ HoverだけでCodexを操作しません。
 
 タスクバーにはHUDのボタンを表示しません。
 
+EXEとタスクトレイは、[`Assets/CodexHud.ico`](../src/CodexHud/Assets/CodexHud.ico)の同じ専用アイコンを使用します。
+
+スタートメニューから起動するには、Release build後に`tools/install-start-menu-shortcut.ps1`を一度実行します。
+
+リポジトリを移動した場合は、同じスクリプトを再実行します。
+
 タスクトレイアイコンのダブルクリックで、HUDの表示と非表示を切り替えます。
 
 右クリックメニューは、次の操作を提供します。

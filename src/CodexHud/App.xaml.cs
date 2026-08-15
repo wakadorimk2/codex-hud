@@ -1,4 +1,5 @@
 using System.Windows;
+using DrawingIcon = System.Drawing.Icon;
 using DrawingSystemIcons = System.Drawing.SystemIcons;
 using CodexHud.Domain;
 using CodexHud.Infrastructure;
@@ -21,6 +22,7 @@ public partial class App : System.Windows.Application
     private SessionCatalogReconciliationQueue? _catalogReconciliationQueue;
     private MainWindow? _window;
     private Forms.NotifyIcon? _trayIcon;
+    private DrawingIcon? _trayIconImage;
     private Forms.ContextMenuStrip? _trayMenu;
     private Forms.ToolStripMenuItem? _toggleHudMenuItem;
 
@@ -161,9 +163,10 @@ public partial class App : System.Windows.Application
         _trayMenu.Items.Add(new Forms.ToolStripSeparator());
         _trayMenu.Items.Add(exitMenuItem);
 
+        _trayIconImage = TryLoadApplicationIcon();
         _trayIcon = new Forms.NotifyIcon
         {
-            Icon = DrawingSystemIcons.Application,
+            Icon = _trayIconImage ?? DrawingSystemIcons.Application,
             Visible = true,
             ContextMenuStrip = _trayMenu
         };
@@ -252,7 +255,33 @@ public partial class App : System.Windows.Application
         _trayMenu?.Dispose();
         _trayMenu = null;
         trayIcon.Dispose();
+        _trayIconImage?.Dispose();
+        _trayIconImage = null;
         _toggleHudMenuItem = null;
+    }
+
+    private static DrawingIcon? TryLoadApplicationIcon()
+    {
+        var processPath = Environment.ProcessPath;
+        if (processPath is null
+            || processPath.Length == 0
+            || !System.IO.File.Exists(processPath))
+        {
+            return null;
+        }
+
+        try
+        {
+            return DrawingIcon.ExtractAssociatedIcon(processPath);
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
+        catch (System.Runtime.InteropServices.ExternalException)
+        {
+            return null;
+        }
     }
 
     private static string LimitTrayText(string text)
