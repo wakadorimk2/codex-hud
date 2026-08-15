@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
     [string]$HookCommandWindows,
@@ -17,6 +17,8 @@ param(
         'SessionEnd'
     ),
 
+    [switch]$RemoveOnly,
+
     [switch]$Apply
 )
 
@@ -27,8 +29,16 @@ if ([string]::IsNullOrWhiteSpace($HookCommandWindows)) {
     throw 'HookCommandWindows must not be empty.'
 }
 
+if ($RemoveOnly -and [string]::IsNullOrWhiteSpace($HookCommandWindows)) {
+    throw 'HookCommandWindows is the exact command to remove when RemoveOnly is used.'
+}
+
 if ([string]::IsNullOrWhiteSpace($HookCommand)) {
     $HookCommand = $HookCommandWindows
+}
+
+if ($RemoveOnly -and -not [string]::IsNullOrWhiteSpace($RemoveHookCommandWindows)) {
+    throw 'RemoveOnly cannot be combined with RemoveHookCommandWindows.'
 }
 
 if (-not [string]::IsNullOrWhiteSpace($RemoveHookCommandWindows) -and
@@ -164,18 +174,27 @@ $existingEvents = [System.Collections.Generic.List[string]]::new()
 $repairedEvents = [System.Collections.Generic.List[string]]::new()
 $removedEvents = [System.Collections.Generic.List[string]]::new()
 
+$commandToRemove = $RemoveHookCommandWindows
+if ($RemoveOnly) {
+    $commandToRemove = $HookCommandWindows
+}
+
 foreach ($eventName in $Events) {
     if ($eventName -notmatch '^[A-Za-z][A-Za-z0-9]*$') {
         throw "Invalid event name: $eventName"
     }
 
     $eventProperty = $config.hooks.PSObject.Properties[$eventName]
-    if ($null -ne $eventProperty -and -not [string]::IsNullOrWhiteSpace($RemoveHookCommandWindows)) {
-        $removeResult = Remove-HookCommand -EventValue $eventProperty.Value -CommandWindows $RemoveHookCommandWindows
+    if ($null -ne $eventProperty -and -not [string]::IsNullOrWhiteSpace($commandToRemove)) {
+        $removeResult = Remove-HookCommand -EventValue $eventProperty.Value -CommandWindows $commandToRemove
         if ($removeResult.Removed) {
             $eventProperty.Value = $removeResult.Groups
             $removedEvents.Add($eventName)
         }
+    }
+
+    if ($RemoveOnly) {
+        continue
     }
 
     $eventProperty = $config.hooks.PSObject.Properties[$eventName]
@@ -216,14 +235,20 @@ foreach ($eventName in $Events) {
 Write-Output "Config: $configPath"
 Write-Output "Mode: $(if ($Apply) { 'APPLY' } else { 'DRY-RUN' })"
 Write-Output "CommandWindows: $HookCommandWindows"
+Write-Output "RemoveOnly: $(if ($RemoveOnly) { 'true' } else { 'false' })"
 Write-Output "Added events: $(if ($addedEvents.Count -gt 0) { $addedEvents -join ', ' } else { '(none)' })"
 Write-Output "Existing events: $(if ($existingEvents.Count -gt 0) { $existingEvents -join ', ' } else { '(none)' })"
 Write-Output "Repaired async events: $(if ($repairedEvents.Count -gt 0) { $repairedEvents -join ', ' } else { '(none)' })"
 Write-Output "Removed old command events: $(if ($removedEvents.Count -gt 0) { $removedEvents -join ', ' } else { '(none)' })"
 
+if ($RemoveOnly -and $removedEvents.Count -eq 0) {
+    Write-Output 'No matching command was found. No file was changed.'
+    return
+}
+
 if (-not $Apply) {
     Write-Output 'No file was changed. Re-run with -Apply after reviewing the command and event list.'
-    exit 0
+    return
 }
 
 $configDirectory = Split-Path -Parent $configPath
@@ -231,7 +256,7 @@ if (-not (Test-Path -LiteralPath $configDirectory -PathType Container)) {
     throw "Codex home does not exist: $configDirectory"
 }
 
-$timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$timestamp = Get-Date -Format 'yyyyMMdd-HHmmssfff'
 $backupPath = "$configPath.backup-$timestamp"
 if (Test-Path -LiteralPath $configPath -PathType Leaf) {
     Copy-Item -LiteralPath $configPath -Destination $backupPath
@@ -244,7 +269,34 @@ $written = (Get-Content -LiteralPath $configPath -Raw -Encoding utf8) | ConvertF
 foreach ($eventName in $Events) {
     $eventProperty = $written.hooks.PSObject.Properties[$eventName]
     if ($null -eq $eventProperty) {
+        if ($RemoveOnly) {
+            continue
+        }
+
         throw "Verification failed for event: $eventName"
+    }
+
+    if ($RemoveOnly) {
+        foreach ($group in @($eventProperty.Value)) {
+            if ($null -eq $group -or $null -eq $group.PSObject.Properties['hooks']) {
+                continue
+            }
+
+            foreach ($handler in @($group.hooks)) {
+                if ($null -eq $handler) {
+                    continue
+                }
+
+                foreach ($propertyName in @('commandWindows', 'command')) {
+                    $property = $handler.PSObject.Properties[$propertyName]
+                    if ($null -ne $property -and $property.Value -eq $commandToRemove) {
+                        throw "Verification failed because the removed command remains for event: $eventName"
+                    }
+                }
+            }
+        }
+
+        continue
     }
 
     $writtenResult = Repair-HookCommand -EventValue $eventProperty.Value
@@ -252,12 +304,12 @@ foreach ($eventName in $Events) {
         throw "Verification failed for synchronous event: $eventName"
     }
 
-    if (-not [string]::IsNullOrWhiteSpace($RemoveHookCommandWindows)) {
+    if (-not [string]::IsNullOrWhiteSpace($commandToRemove)) {
         foreach ($group in @($eventProperty.Value)) {
             foreach ($handler in @($group.hooks)) {
                 foreach ($propertyName in @('commandWindows', 'command')) {
                     $property = $handler.PSObject.Properties[$propertyName]
-                    if ($null -ne $property -and $property.Value -eq $RemoveHookCommandWindows) {
+                    if ($null -ne $property -and $property.Value -eq $commandToRemove) {
                         throw "Verification failed because the old command remains for event: $eventName"
                     }
                 }

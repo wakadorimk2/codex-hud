@@ -4,3 +4,4 @@ TestResults/
 .vs/
 __pycache__/
 *.py[cod]
+artifacts/

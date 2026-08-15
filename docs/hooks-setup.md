@@ -141,3 +141,51 @@ Enterlightなど、一致しない既存Hookは保持します。
 `Stop`でグレーの静止表示になり、`NeedsAttention`の一覧優先度を維持することを確認します。
 
 Hook commandが利用できない場合も、bridgeは終了コード0を返します。
+
+## Release ZIPのHook設定
+
+Release ZIPは、`app\CodexHud.exe`をインストール先へ配置します。
+
+ZIPを展開したフォルダーで、次のコマンドを実行します。
+
+```powershell
+powershell -NoProfile -File .\Install-CodexHud.ps1
+```
+
+インストーラーは、次の5イベントへインストール先HUD commandを追加するdry-runを表示します。
+
+- `SessionStart`
+- `UserPromptSubmit`
+- `PermissionRequest`
+- `Stop`
+- `SessionEnd`
+
+既存の`CodexHud.exe --hook` commandが1つだけ見つかった場合、インストーラーはその文字列を完全一致で削除対象にします。
+
+旧commandが複数ある場合、インストーラーは自動適用せず警告します。
+
+Enterlightなど、別のcommandは保持します。
+
+dry-runを確認して`Y`を入力した場合だけ、`hooks.json`を書き換えます。
+
+適用前に`hooks.json.backup-<timestamp>`を作成します。
+
+`N`を入力すると、Hookは変更しません。
+
+Hook設定が成功した場合だけ、インストール先HUDを起動します。
+
+アンインストールは、次のコマンドを実行します。
+
+```powershell
+powershell -NoProfile -File .\Uninstall-CodexHud.ps1
+```
+
+アンインストーラーは`%LOCALAPPDATA%\CodexHud\App\CodexHud.exe --hook`だけを`-RemoveOnly`でdry-runします。
+
+削除対象がない場合、`hooks.json`を書き換えません。
+
+削除対象がある場合、確認後にバックアップを作成して削除します。
+
+アンインストーラーは、異なるEXEを指す`Codex HUD.lnk`を削除しません。
+
+アンインストーラーは`position.json`と`sessions.json`を残します。

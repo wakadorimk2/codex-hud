@@ -28,6 +28,28 @@ python -m unittest discover -s experiments -p 'test_*.py'
 
 テストは、三状態と表示属性の描画、可視ピクセル、複数セッションの独立遷移、状態優先順、`SessionEnd`の猶予と削除中止、状態スナップショットの復元、時刻なし旧スナップショットの除外、表示属性なし旧スナップショットの復元、セッションカタログの匿名化とアーカイブ照合、5分整理、Hook payloadの匿名化、Named Pipe、bridgeの終了コード、DPI配置、折返し、位置の永続化を確認します。
 
+## Distribution
+
+`tools/publish-release.ps1`は、`src/CodexHud/CodexHud.csproj`の`Version`を読み取ります。
+
+このスクリプトは、`Release`、`win-x64`、self-containedで`dotnet publish`を実行します。
+
+このスクリプトは、single-fileを使用しません。
+
+このスクリプトは、SkiaSharpのNative DLLを含むフォルダー形式のZIPを作成します。
+
+```powershell
+pwsh -NoProfile -File .\tools\publish-release.ps1
+```
+
+出力先は`artifacts\CodexHud-<version>-win-x64.zip`です。
+
+ZIPの`app`フォルダーには、`CodexHud.exe`、マネージドDLL、JSON、PDB、self-contained runtime、SkiaSharp Native DLLを含めます。
+
+Release ZIPのインストール先は`%LOCALAPPDATA%\CodexHud\App`です。
+
+状態ファイルはアプリフォルダーの外にあるため、更新とアンインストールで保持します。
+
 ## Runtime modes
 
 引数なしで起動すると、HUDとNamed Pipe serverを起動します。
@@ -36,7 +58,7 @@ python -m unittest discover -s experiments -p 'test_*.py'
 
 EXEとタスクトレイは、同じ専用ICOを使用します。
 
-Release EXEをスタートメニューから起動する場合は、`tools/install-start-menu-shortcut.ps1`を実行します。
+開発中のRelease EXEをスタートメニューから起動する場合は、`tools/install-start-menu-shortcut.ps1`を実行します。
 
 タスクトレイからHUDを表示、非表示、位置編集、終了できます。
 
@@ -84,7 +106,9 @@ Hook観測時刻とカタログ最終更新時刻がどちらもないセッシ�
 
 表示中のセッション数は、匿名化済みセッションIDの一意な集合から求めます。
 
-Hook設定とEnterlightなどの既存Hookは変更しません。
+アプリ本体はHook設定を変更しません。
+
+配布版のインストーラーとアンインストーラーは、dry-runとユーザー確認の後だけHook設定を変更します。
 
 ## Manual acceptance
 
