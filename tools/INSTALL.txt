@@ -1,0 +1,28 @@
+Codex HUD Windows x64 package
+
+Requirements
+- Windows x64
+- No .NET Desktop Runtime is required.
+
+Install
+1. Extract this ZIP to a local folder.
+2. Open PowerShell in the extracted folder.
+3. Run:
+
+   powershell -NoProfile -File .\Install-CodexHud.ps1
+
+The installer shows a Hook dry-run before it changes hooks.json.
+Type Y only after you confirm the event and command list.
+Type N to keep hooks.json unchanged.
+
+The installer creates or updates the Start menu shortcut named Codex HUD.
+It stores the app under %LOCALAPPDATA%\CodexHud\App.
+It keeps position.json and sessions.json under %LOCALAPPDATA%\CodexHud.
+
+Uninstall
+Run:
+
+   powershell -NoProfile -File .\Uninstall-CodexHud.ps1
+
+The uninstaller removes only the installed HUD Hook after confirmation.
+It keeps unrelated Hooks, position.json, and sessions.json.

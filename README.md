@@ -77,11 +77,11 @@ For development:
 For the release ZIP:
 
 - Windows x64
-- .NET 10 Desktop Runtime
+- No .NET Desktop Runtime
 
-The release ZIP is framework-dependent. It does not include the .NET runtime.
+The release ZIP is self-contained. It includes the .NET runtime and SkiaSharp native DLLs.
 
-### Build and run
+### Developer workflow
 
 リポジトリのルートで実行します。
 
@@ -92,7 +92,67 @@ dotnet run --project .\src\CodexHud\CodexHud.csproj -c Release
 
 引数なしで起動すると、HUDとNamed Pipe serverを起動します。
 
-### Start menu shortcut
+Release ZIPを作成します。
+
+```powershell
+pwsh -NoProfile -File .\tools\publish-release.ps1
+```
+
+ZIPは`artifacts\CodexHud-<version>-win-x64.zip`へ作成します。
+
+### Package user workflow
+
+ZIPを展開したフォルダーで、次の1コマンドを実行します。
+
+```powershell
+powershell -NoProfile -File .\Install-CodexHud.ps1
+```
+
+インストーラーは`app\CodexHud.exe`を確認します。
+
+インストーラーは`%LOCALAPPDATA%\CodexHud\App`へアプリを配置します。
+
+インストーラーはスタートメニューの`Codex HUD.lnk`をインストール先EXEへ更新します。
+
+インストーラーは`SessionStart`、`UserPromptSubmit`、`PermissionRequest`、`Stop`、`SessionEnd`のHook dry-runを表示します。
+
+既存のリポジトリ版HUD Hookが1つのコマンドだけの場合、その完全一致コマンドを削除対象として表示します。
+
+旧HUD Hookコマンドが複数ある場合、インストーラーはHookを自動変更しません。
+
+Enterlightなど、異なるHookコマンドは保持します。
+
+内容を確認して`Y`を入力した場合だけ、`hooks.json`を書き換えます。
+
+適用前に`hooks.json.backup-<timestamp>`を作成します。
+
+`N`を入力した場合、Hookは変更しません。
+
+Hook適用が成功した場合だけ、インストール先HUDを起動します。
+
+インストール先HUDは管理者権限を要求しません。
+
+インストール先HUDはレジストリ、Program Files、ログイン時スタートアップを変更しません。
+
+状態ファイルは`%LOCALAPPDATA%\CodexHud\position.json`と`%LOCALAPPDATA%\CodexHud\sessions.json`へ保存します。
+
+アンインストールは、ZIPを展開したフォルダーで実行します。
+
+```powershell
+powershell -NoProfile -File .\Uninstall-CodexHud.ps1
+```
+
+アンインストーラーは、インストール先EXEを指すHookだけをdry-runで削除対象にします。
+
+確認後だけ`hooks.json`を変更します。
+
+アンインストーラーは別のEXEを指すショートカットを削除しません。
+
+アンインストーラーは`%LOCALAPPDATA%\CodexHud\App`だけを削除します。
+
+`position.json`と`sessions.json`は残します。
+
+### Developer start menu shortcut
 
 Release EXEをbuildした後に、一度だけ実行します。
 
