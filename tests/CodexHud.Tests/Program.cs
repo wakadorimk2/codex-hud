@@ -22,6 +22,11 @@ internal static class Program
             ("legacy session snapshots without timestamps are excluded", TestLegacySessionSnapshot),
             ("legacy session snapshots default missing appearance", TestLegacySnapshotDefaultsAppearance),
             ("session catalog probe sanitizes IDs and marks archived sessions", TestSessionCatalogProbe),
+            ("session file discovery recurses and keeps the newest bounded candidates", TestSessionFileDiscovery),
+            ("JSONL event probe reads explicit events incrementally", TestJsonlEventProbe),
+            ("JSONL activity respects Hook attention precedence", TestJsonlAttentionPrecedence),
+            ("partial discovery does not remove stale sessions", TestPartialDiscoveryCleanup),
+            ("session file watcher wakes on JSONL changes", TestSessionFileWatcher),
             ("catalog read failure keeps saved sessions", TestCatalogReadFailure),
             ("session catalog cleanup removes archived and stale sessions", TestSessionCatalogCleanup),
             ("session catalog reconciliation requests are serialized and coalesced", TestSessionCatalogReconciliationQueue),
@@ -251,6 +256,8 @@ internal static class Program
         var path = Path.Combine(directory, "sessions.json");
         const string runningSession = "session-running";
         const string attentionSession = "session-attention";
+        var runningHookAtUtc = DateTimeOffset.Parse("2026-08-16T12:00:00Z");
+        var runningJsonlAtUtc = DateTimeOffset.Parse("2026-08-16T12:00:01Z");
 
         try
         {
@@ -260,7 +267,11 @@ internal static class Program
                 firstStore.Apply(new HookObservation(
                     HookEventKind.SessionStart,
                     runningSession,
-                    DateTimeOffset.UtcNow));
+                    runningHookAtUtc));
+                firstStore.Apply(new JsonlActivityObservation(
+                    runningSession,
+                    JsonlActivityKind.TurnStarted,
+                    runningJsonlAtUtc));
                 firstStore.Apply(new HookObservation(
                     HookEventKind.Stop,
                     attentionSession,
@@ -281,7 +292,11 @@ internal static class Program
                 Assert.Equal(attentionSession, restored[0].SessionId);
                 Assert.Equal(LampState.NeedsAttention, restored[0].State);
                 Assert.Equal(LampAppearance.Muted, restored[0].Appearance);
-                Assert.Equal(runningSession, restored[1].SessionId);
+                var restoredRunning = restored[1];
+                Assert.Equal(runningSession, restoredRunning.SessionId);
+                Assert.Equal(runningHookAtUtc, restoredRunning.LastHookObservedAtUtc);
+                Assert.Equal(runningJsonlAtUtc, restoredRunning.LastJsonlActivityAtUtc);
+                Assert.Equal(runningJsonlAtUtc, restoredRunning.LastObservedAtUtc);
 
                 restoredStore.Apply(new HookObservation(
                     HookEventKind.SessionEnd,
@@ -440,6 +455,329 @@ internal static class Program
                     .TryRead(out _),
                 "Missing catalog unexpectedly succeeded.");
             return Task.CompletedTask;
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    private static Task TestSessionFileDiscovery()
+    {
+        var directory = Path.Combine(
+            Path.GetTempPath(),
+            $"codex-hud-discovery-{Guid.NewGuid():N}");
+        var datedDirectory = Path.Combine(directory, "2026", "08", "16");
+        var now = DateTimeOffset.Parse("2026-08-16T12:00:00Z");
+
+        try
+        {
+            Directory.CreateDirectory(datedDirectory);
+            for (var index = 0; index < 70; index++)
+            {
+                var rawSessionId = Guid.NewGuid().ToString();
+                var fileName = $"rollout-2026-08-16T11-00-{index:00}-{rawSessionId}.jsonl";
+                var parent = index % 2 == 0 ? datedDirectory : directory;
+                var path = Path.Combine(parent, fileName);
+                File.WriteAllText(path, string.Empty);
+                File.SetLastWriteTimeUtc(
+                    path,
+                    now.Subtract(TimeSpan.FromMinutes(index)).UtcDateTime);
+            }
+
+            var oldPath = Path.Combine(
+                datedDirectory,
+                $"rollout-2026-08-15T00-00-00-{Guid.NewGuid()}.jsonl");
+            File.WriteAllText(oldPath, string.Empty);
+            File.SetLastWriteTimeUtc(
+                oldPath,
+                now.Subtract(TimeSpan.FromHours(3)).UtcDateTime);
+
+            File.WriteAllText(
+                Path.Combine(datedDirectory, "not-a-session.jsonl"),
+                "{}\n");
+
+            const string metadataSessionId = "66666666-6666-6666-6666-666666666666";
+            var metadataPath = Path.Combine(datedDirectory, "session-meta.jsonl");
+            File.WriteAllText(
+                metadataPath,
+                "{\"type\":\"session_meta\",\"payload\":{\"type\":\"session_meta\",\"id\":\""
+                + metadataSessionId
+                + "\"}}\n");
+            File.SetLastWriteTimeUtc(metadataPath, now.UtcDateTime);
+
+            var discovery = new CodexSessionFileDiscovery(
+                directory,
+                activeWindowMinutes: 120,
+                maximumCandidates: 64);
+            var result = discovery.Discover(now);
+
+            Assert.True(result.IsComplete, "Complete discovery was marked partial.");
+            Assert.Equal(64, result.Candidates.Count);
+            Assert.True(
+                result.Candidates.Zip(
+                        result.Candidates.Skip(1),
+                        (first, second) => first.LastWriteTimeUtc >= second.LastWriteTimeUtc)
+                    .All(isOrdered => isOrdered),
+                "Candidates were not ordered by newest write time.");
+            Assert.True(
+                result.Candidates
+                    .Where(candidate => !candidate.FullPath.EndsWith(
+                        "session-meta.jsonl",
+                        StringComparison.Ordinal))
+                    .All(candidate => candidate.Length == 0),
+                "Unexpected file data was assigned to a metadata-free candidate.");
+            Assert.True(
+                result.Candidates.All(candidate =>
+                    !candidate.FullPath.EndsWith("not-a-session.jsonl", StringComparison.Ordinal)),
+                "An unknown filename was treated as a session.");
+            Assert.True(
+                result.Candidates.All(candidate =>
+                    !candidate.FullPath.Equals(oldPath, StringComparison.OrdinalIgnoreCase)),
+                "An old file was treated as an active candidate.");
+            Assert.True(
+                result.Candidates.Any(candidate =>
+                    candidate.SessionId == HashSessionIdForTest(metadataSessionId)),
+                "A confirmed session_meta identity was not accepted.");
+            return Task.CompletedTask;
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    private static Task TestJsonlEventProbe()
+    {
+        var directory = Path.Combine(
+            Path.GetTempPath(),
+            $"codex-hud-jsonl-{Guid.NewGuid():N}");
+        var now = DateTimeOffset.Parse("2026-08-16T12:00:00Z");
+        var rawSessionId = "33333333-3333-3333-3333-333333333333";
+        var sessionId = HashSessionIdForTest(rawSessionId);
+        var path = Path.Combine(
+            directory,
+            "2026",
+            "08",
+            "16",
+            $"rollout-2026-08-16T11-59-00-{rawSessionId}.jsonl");
+
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            var sessionMeta = "{\"type\":\"session_meta\",\"payload\":{\"type\":\"session_meta\",\"id\":\""
+                + rawSessionId
+                + "\"}}";
+            var started = "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"session_id\":\""
+                + rawSessionId
+                + "\"}}";
+            var unknown = "{\"type\":\"event_msg\",\"payload\":{\"type\":\"future_event\",\"private\":\"ignore\"}}";
+            var malformed = "{not-json";
+            var incomplete = "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\"";
+            File.WriteAllText(
+                path,
+                string.Join(
+                    Environment.NewLine,
+                    sessionMeta,
+                    started,
+                    "{\"type\":\"response_item\",\"payload\":{\"message\":\"private prompt never crosses\"}}",
+                    "{\"type\":\"response_item\",\"payload\":{\"type\":\"custom_tool_call\",\"arguments\":{\"private\":\"tool input never crosses\"}}}",
+                    unknown,
+                    malformed,
+                    incomplete));
+            File.SetLastWriteTimeUtc(path, now.UtcDateTime);
+
+            var discovery = new CodexSessionFileDiscovery(
+                directory,
+                activeWindowMinutes: 30,
+                maximumCandidates: 64);
+            var probe = new CodexSessionEventProbe();
+            var firstRead = probe.Read(discovery.Discover(now), now);
+            Assert.Equal(1, firstRead.Count);
+            Assert.Equal(JsonlActivityKind.TurnStarted, firstRead[0].Kind);
+            Assert.Equal(sessionId, firstRead[0].SessionId);
+            var firstSerialized = JsonSerializer.Serialize(firstRead);
+            Assert.True(
+                !firstSerialized.Contains("private prompt", StringComparison.Ordinal),
+                "Prompt text crossed the JSONL observation boundary.");
+            Assert.True(
+                !firstSerialized.Contains("tool input", StringComparison.Ordinal),
+                "Tool input crossed the JSONL observation boundary.");
+
+            using var store = new SessionStateStore(
+                new SessionStateSnapshotStore(
+                    Path.Combine(directory, "state", "sessions.json")));
+            foreach (var observation in firstRead)
+            {
+                store.Apply(observation);
+            }
+
+            Assert.Equal(LampState.Running, store.GetSessionState(sessionId));
+
+            File.AppendAllText(path, "}}" + Environment.NewLine);
+            File.SetLastWriteTimeUtc(path, now.AddSeconds(1).UtcDateTime);
+            var secondRead = probe.Read(discovery.Discover(now.AddSeconds(1)), now.AddSeconds(1));
+            Assert.Equal(1, secondRead.Count);
+            Assert.Equal(JsonlActivityKind.TurnCompleted, secondRead[0].Kind);
+            store.Apply(secondRead[0]);
+            Assert.Equal(LampState.Idle, store.GetSessionState(sessionId));
+
+            File.AppendAllText(
+                path,
+                new string('x', 70 * 1024)
+                + Environment.NewLine
+                + started
+                + Environment.NewLine);
+            File.SetLastWriteTimeUtc(path, now.AddSeconds(2).UtcDateTime);
+            var thirdRead = probe.Read(discovery.Discover(now.AddSeconds(2)), now.AddSeconds(2));
+            Assert.Equal(1, thirdRead.Count);
+            Assert.Equal(JsonlActivityKind.TurnStarted, thirdRead[0].Kind);
+
+            File.WriteAllText(path, sessionMeta + Environment.NewLine + started + Environment.NewLine);
+            File.SetLastWriteTimeUtc(path, now.AddSeconds(3).UtcDateTime);
+            var afterReplacement = probe.Read(
+                discovery.Discover(now.AddSeconds(3)),
+                now.AddSeconds(3));
+            Assert.Equal(1, afterReplacement.Count);
+            Assert.Equal(JsonlActivityKind.TurnStarted, afterReplacement[0].Kind);
+
+            var noActivityPath = Path.Combine(
+                directory,
+                "2026",
+                "08",
+                "16",
+                $"rollout-2026-08-16T11-59-01-{Guid.NewGuid()}.jsonl");
+            File.WriteAllText(noActivityPath, sessionMeta + Environment.NewLine);
+            File.SetLastWriteTimeUtc(noActivityPath, now.UtcDateTime);
+            var noActivityRead = probe.Read(discovery.Discover(now), now);
+            Assert.True(
+                noActivityRead.All(observation => observation.SessionId != HashSessionIdForTest(
+                    Path.GetFileNameWithoutExtension(noActivityPath)["rollout-2026-08-16T11-59-01-".Length..])),
+                "mtime alone created JSONL activity.");
+            return Task.CompletedTask;
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    private static Task TestJsonlAttentionPrecedence()
+    {
+        return WithTestStore(store =>
+        {
+            var sessionId = HashSessionIdForTest(
+                "44444444-4444-4444-4444-444444444444");
+            var first = DateTimeOffset.Parse("2026-08-16T12:00:00Z");
+
+            store.Apply(new HookObservation(
+                HookEventKind.Stop,
+                sessionId,
+                first));
+            store.Apply(new JsonlActivityObservation(
+                sessionId,
+                JsonlActivityKind.TurnCompleted,
+                first.AddSeconds(1)));
+            store.Apply(new JsonlActivityObservation(
+                sessionId,
+                JsonlActivityKind.TurnStarted,
+                first.AddSeconds(2)));
+
+            Assert.Equal(LampState.NeedsAttention, store.GetSessionState(sessionId));
+            Assert.Equal(first, store.CurrentSessions[0].LastHookObservedAtUtc);
+            Assert.Equal(first.AddSeconds(2), store.CurrentSessions[0].LastJsonlActivityAtUtc);
+            Assert.Equal(
+                first.AddSeconds(2),
+                store.CurrentSessions[0].LastObservedAtUtc);
+
+            store.Apply(new HookObservation(
+                HookEventKind.UserPromptSubmit,
+                sessionId,
+                first.AddSeconds(3)));
+            Assert.Equal(LampState.Running, store.GetSessionState(sessionId));
+            Assert.Equal(1, store.CurrentSessions.Count);
+            return Task.CompletedTask;
+        });
+    }
+
+    private static Task TestPartialDiscoveryCleanup()
+    {
+        return WithTestStore(store =>
+        {
+            var now = DateTimeOffset.Parse("2026-08-16T12:00:00Z");
+            const string staleSession = "session-partial-stale";
+            const string archivedSession = "session-partial-archived";
+            store.Apply(new HookObservation(
+                HookEventKind.Stop,
+                staleSession,
+                now.AddMinutes(-10)));
+            store.Apply(new HookObservation(
+                HookEventKind.Stop,
+                archivedSession,
+                now.AddMinutes(-10)));
+
+            var removed = store.ReconcileCatalog(
+                new[]
+                {
+                    new SessionCatalogEntry(
+                        archivedSession,
+                        LastUpdatedAtUtc: null,
+                        IsArchived: true)
+                },
+                now,
+                allowStaleRemoval: false);
+
+            Assert.Equal(1, removed);
+            Assert.True(
+                store.CurrentSessions.Any(session => session.SessionId == staleSession),
+                "Partial discovery removed a stale session without evidence.");
+            Assert.True(
+                store.CurrentSessions.All(session => session.SessionId != archivedSession),
+                "Archived session was not removed during partial discovery.");
+            return Task.CompletedTask;
+        });
+    }
+
+    private static async Task TestSessionFileWatcher()
+    {
+        var directory = Path.Combine(
+            Path.GetTempPath(),
+            $"codex-hud-watcher-{Guid.NewGuid():N}");
+        var callbackCount = 0;
+        var callbackStarted = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        try
+        {
+            Directory.CreateDirectory(directory);
+            using var watcher = new CodexSessionFileWatcher(
+                directory,
+                () =>
+                {
+                    Interlocked.Increment(ref callbackCount);
+                    callbackStarted.TrySetResult(true);
+                });
+
+            File.WriteAllText(
+                Path.Combine(
+                    directory,
+                    "rollout-2026-08-16T12-00-00-55555555-5555-5555-5555-555555555555.jsonl"),
+                "{}\n");
+            await WaitUntil(
+                () => callbackStarted.Task.IsCompleted,
+                TimeSpan.FromSeconds(2));
+            Assert.True(
+                Volatile.Read(ref callbackCount) >= 1,
+                "JSONL change did not wake the watcher callback.");
         }
         finally
         {

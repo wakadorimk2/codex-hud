@@ -17,6 +17,10 @@ public partial class App : System.Windows.Application
     private NamedPipeStateServer? _stateServer;
     private SessionStateStore? _stateStore;
     private CodexSessionCatalogProbe? _catalogProbe;
+    private CodexSessionFileDiscovery? _sessionFileDiscovery;
+    private CodexSessionEventProbe? _sessionEventProbe;
+    private SessionCatalogReconciler? _sessionCatalogReconciler;
+    private CodexSessionFileWatcher? _sessionFileWatcher;
     private CancellationTokenSource? _catalogCleanupShutdown;
     private Task? _catalogCleanupTask;
     private SessionCatalogReconciliationQueue? _catalogReconciliationQueue;
@@ -60,6 +64,14 @@ public partial class App : System.Windows.Application
 
         _stateStore = new SessionStateStore();
         _catalogProbe = new CodexSessionCatalogProbe();
+        _sessionFileDiscovery = new CodexSessionFileDiscovery();
+        _sessionEventProbe = new CodexSessionEventProbe();
+        _sessionCatalogReconciler = new SessionCatalogReconciler(
+            _stateStore,
+            _catalogProbe,
+            _sessionFileDiscovery,
+            _sessionEventProbe,
+            RequestSessionCatalogReconciliation);
 
         _window = new MainWindow();
         _window.SetSessions(_stateStore.CurrentSessions);
@@ -71,6 +83,9 @@ public partial class App : System.Windows.Application
         _catalogCleanupShutdown = new CancellationTokenSource();
         _catalogReconciliationQueue = new SessionCatalogReconciliationQueue(
             ReconcileSessionCatalog);
+        _sessionFileWatcher = new CodexSessionFileWatcher(
+            _sessionFileDiscovery.SessionsRoot,
+            RequestSessionCatalogReconciliation);
         _catalogCleanupTask = RunSessionCatalogCleanupAsync(
             _catalogCleanupShutdown.Token);
 
@@ -91,6 +106,8 @@ public partial class App : System.Windows.Application
         }
 
         _catalogCleanupShutdown?.Cancel();
+        _sessionFileWatcher?.Dispose();
+        _sessionFileWatcher = null;
         try
         {
             _catalogCleanupTask?.GetAwaiter().GetResult();
@@ -110,6 +127,9 @@ public partial class App : System.Windows.Application
             _catalogCleanupShutdown = null;
             _catalogCleanupTask = null;
             _catalogReconciliationQueue = null;
+            _sessionCatalogReconciler = null;
+            _sessionEventProbe = null;
+            _sessionFileDiscovery = null;
         }
 
         _stateStore?.Dispose();
@@ -310,14 +330,7 @@ public partial class App : System.Windows.Application
 
     private void ReconcileSessionCatalog()
     {
-        if (_stateStore is null
-            || _catalogProbe is null
-            || !_catalogProbe.TryRead(out var entries))
-        {
-            return;
-        }
-
-        _stateStore.ReconcileCatalog(entries, DateTimeOffset.UtcNow);
+        _sessionCatalogReconciler?.Reconcile();
     }
 
     private async Task RunSessionCatalogCleanupAsync(CancellationToken cancellationToken)

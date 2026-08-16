@@ -8,4 +8,8 @@ public sealed record SessionLampState(
     public LampAppearance Appearance { get; init; } = LampAppearance.Default;
 
     public DateTimeOffset? LastObservedAtUtc { get; init; }
+
+    public DateTimeOffset? LastHookObservedAtUtc { get; init; }
+
+    public DateTimeOffset? LastJsonlActivityAtUtc { get; init; }
 }

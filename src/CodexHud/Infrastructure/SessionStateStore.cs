@@ -141,18 +141,26 @@ public sealed class SessionStateStore : IDisposable
                     : 1;
                 _removalGenerations[observation.SessionId] = removalGeneration;
 
+                var lastObservedAtUtc = Max(
+                    existingSession.LastObservedAtUtc,
+                    observedAtUtc);
+                var lastHookObservedAtUtc = Max(
+                    existingSession.LastHookObservedAtUtc,
+                    observedAtUtc);
                 if (existingSession.State != LampState.Idle
-                    || existingSession.Appearance != LampAppearance.Default)
+                    || existingSession.Appearance != LampAppearance.Default
+                    || existingSession.LastObservedAtUtc != lastObservedAtUtc
+                    || existingSession.LastHookObservedAtUtc != lastHookObservedAtUtc)
                 {
                     _sessionStates[observation.SessionId] = existingSession with
                     {
                         State = LampState.Idle,
                         Appearance = LampAppearance.Default,
-                        LastObservedAtUtc = Max(
-                            existingSession.LastObservedAtUtc,
-                            observedAtUtc)
+                        LastObservedAtUtc = lastObservedAtUtc,
+                        LastHookObservedAtUtc = lastHookObservedAtUtc
                     };
-                    notifySessions = true;
+                    notifySessions = existingSession.State != LampState.Idle
+                        || existingSession.Appearance != LampAppearance.Default;
                 }
 
                 sessions = CreateSnapshot();
@@ -168,15 +176,20 @@ public sealed class SessionStateStore : IDisposable
                     var lastObservedAtUtc = Max(
                         existingSession.LastObservedAtUtc,
                         observedAtUtc);
+                    var lastHookObservedAtUtc = Max(
+                        existingSession.LastHookObservedAtUtc,
+                        observedAtUtc);
                     if (existingSession.State != nextState.Value
                         || existingSession.Appearance != nextAppearance
-                        || existingSession.LastObservedAtUtc != lastObservedAtUtc)
+                        || existingSession.LastObservedAtUtc != lastObservedAtUtc
+                        || existingSession.LastHookObservedAtUtc != lastHookObservedAtUtc)
                     {
                         _sessionStates[observation.SessionId] = existingSession with
                         {
                             State = nextState.Value,
                             Appearance = nextAppearance,
-                            LastObservedAtUtc = lastObservedAtUtc
+                            LastObservedAtUtc = lastObservedAtUtc,
+                            LastHookObservedAtUtc = lastHookObservedAtUtc
                         };
                         notifySessions = existingSession.State != nextState.Value
                             || existingSession.Appearance != nextAppearance;
@@ -191,7 +204,8 @@ public sealed class SessionStateStore : IDisposable
                     session = session with
                     {
                         Appearance = nextAppearance,
-                        LastObservedAtUtc = observedAtUtc
+                        LastObservedAtUtc = observedAtUtc,
+                        LastHookObservedAtUtc = observedAtUtc
                     };
                     _sessionStates.Add(observation.SessionId, session);
                     notifySessions = true;
@@ -223,10 +237,130 @@ public sealed class SessionStateStore : IDisposable
         }
     }
 
+    public void Apply(JsonlActivityObservation observation)
+    {
+        if (_disposed
+            || string.IsNullOrWhiteSpace(observation.SessionId)
+            || string.Equals(observation.SessionId, "session-unknown", StringComparison.Ordinal)
+            || !Enum.IsDefined(observation.Kind))
+        {
+            return;
+        }
+
+        var observedAtUtc = observation.ObservedAtUtc.ToUniversalTime();
+        var isStart = observation.Kind is
+            JsonlActivityKind.TurnStarted or JsonlActivityKind.ActivityHeartbeat;
+        var isCompletion = observation.Kind is
+            JsonlActivityKind.TurnCompleted or JsonlActivityKind.TurnAborted;
+        if (!isStart && !isCompletion)
+        {
+            return;
+        }
+
+        LampState previousState;
+        LampState currentState;
+        IReadOnlyList<SessionLampState> sessions;
+        var notifySessions = false;
+        var persistSessions = false;
+
+        lock (_gate)
+        {
+            previousState = GetAggregateState();
+
+            if (!_sessionStates.TryGetValue(observation.SessionId, out var existingSession))
+            {
+                if (!isStart)
+                {
+                    return;
+                }
+
+                var newSession = new SessionLampState(
+                    observation.SessionId,
+                    LampState.Running,
+                    ++_nextFirstSeenOrder)
+                {
+                    LastObservedAtUtc = observedAtUtc,
+                    LastJsonlActivityAtUtc = observedAtUtc
+                };
+                _sessionStates.Add(observation.SessionId, newSession);
+                _removalGenerations.Remove(observation.SessionId);
+                sessions = CreateSnapshot();
+                notifySessions = true;
+                persistSessions = true;
+                currentState = GetAggregateState();
+            }
+            else
+            {
+                if (existingSession.LastJsonlActivityAtUtc.HasValue
+                    && observedAtUtc < existingSession.LastJsonlActivityAtUtc.Value)
+                {
+                    return;
+                }
+
+                _removalGenerations.Remove(observation.SessionId);
+                var nextState = existingSession.State;
+                var nextAppearance = existingSession.Appearance;
+                if (isStart)
+                {
+                    if (existingSession.State != LampState.NeedsAttention)
+                    {
+                        nextState = LampState.Running;
+                        nextAppearance = LampAppearance.Default;
+                    }
+                }
+                else if (existingSession.State != LampState.NeedsAttention
+                    && (!existingSession.LastHookObservedAtUtc.HasValue
+                        || observedAtUtc >= existingSession.LastHookObservedAtUtc.Value))
+                {
+                    nextState = LampState.Idle;
+                    nextAppearance = LampAppearance.Default;
+                }
+
+                var lastJsonlActivityAtUtc = Max(
+                    existingSession.LastJsonlActivityAtUtc,
+                    observedAtUtc);
+                var lastObservedAtUtc = Max(
+                    existingSession.LastObservedAtUtc,
+                    observedAtUtc);
+                if (existingSession.State != nextState
+                    || existingSession.Appearance != nextAppearance
+                    || existingSession.LastObservedAtUtc != lastObservedAtUtc
+                    || existingSession.LastJsonlActivityAtUtc != lastJsonlActivityAtUtc)
+                {
+                    _sessionStates[observation.SessionId] = existingSession with
+                    {
+                        State = nextState,
+                        Appearance = nextAppearance,
+                        LastObservedAtUtc = lastObservedAtUtc,
+                        LastJsonlActivityAtUtc = lastJsonlActivityAtUtc
+                    };
+                    notifySessions = existingSession.State != nextState
+                        || existingSession.Appearance != nextAppearance;
+                    persistSessions = true;
+                }
+
+                sessions = CreateSnapshot();
+                currentState = GetAggregateState();
+            }
+        }
+
+        RaiseChanges(
+            previousState,
+            currentState,
+            sessions,
+            notifySessions);
+
+        if (persistSessions)
+        {
+            _snapshotStore.TrySave(sessions);
+        }
+    }
+
     public int ReconcileCatalog(
         IEnumerable<SessionCatalogEntry> catalogEntries,
         DateTimeOffset nowUtc,
-        TimeSpan? cleanupAge = null)
+        TimeSpan? cleanupAge = null,
+        bool allowStaleRemoval = true)
     {
         if (_disposed)
         {
@@ -257,7 +391,8 @@ public sealed class SessionStateStore : IDisposable
                         session,
                         catalog,
                         nowUtc,
-                        maxAge))
+                        maxAge,
+                        allowStaleRemoval))
                 {
                     continue;
                 }
@@ -423,12 +558,18 @@ public sealed class SessionStateStore : IDisposable
         SessionLampState session,
         IReadOnlyDictionary<string, SessionCatalogEntry> catalog,
         DateTimeOffset nowUtc,
-        TimeSpan maxAge)
+        TimeSpan maxAge,
+        bool allowStaleRemoval)
     {
         catalog.TryGetValue(session.SessionId, out var catalogEntry);
         if (catalogEntry?.IsArchived == true)
         {
             return true;
+        }
+
+        if (!allowStaleRemoval)
+        {
+            return false;
         }
 
         var lastActivityAtUtc = Max(

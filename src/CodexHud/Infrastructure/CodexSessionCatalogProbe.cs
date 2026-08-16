@@ -162,7 +162,7 @@ public sealed class CodexSessionCatalogProbe
         return first.Value >= second.Value ? first : second;
     }
 
-    private static string GetDefaultCodexDirectory()
+    internal static string GetDefaultCodexDirectory()
     {
         var candidates = new List<string>();
         AddCandidate(candidates, Environment.GetEnvironmentVariable("CODEX_HOME"));

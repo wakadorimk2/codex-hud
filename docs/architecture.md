@@ -69,6 +69,24 @@ Codex Hook
   → SkiaSharpLampRenderer
 ```
 
+JSONLの補助経路は、Hook経路と独立しています。
+
+```text
+sessions/**/*.jsonl
+  → bounded CodexSessionFileDiscovery
+  → incremental CodexSessionEventProbe
+  → normalized JsonlActivityObservation
+  → SessionStateStore
+```
+
+`SessionCatalogReconciliationQueue`は、Hook受信、起動、JSONL変更、1分周期の要求を一つの照合処理へまとめます。
+
+`CodexSessionFileWatcher`は、`Changed`、`Created`、`Deleted`、`Renamed`、`Error`で照合を要求します。
+
+Watcherは状態を推測しません。
+
+`SessionCatalogReconciler`は、カタログ読取、JSONL候補探索、増分JSONL読取、Store適用、整理をこの順序で実行します。
+
 `HookBridge`は標準入力を一回読みます。
 
 `HookObservationParser`はイベント名を許可済みの列挙値へ変換します。
@@ -83,7 +101,11 @@ prompt、command、tool input、cwd、生のHook JSONはNamed Pipeへ渡しま�
 
 HUDはStoreのセッション一覧だけを読み取ります。
 
-`SessionLampState`は、匿名化済みセッションID、ランプ状態、表示属性、初回観測順、最終Hook観測日時を保持します。
+`SessionLampState`は、匿名化済みセッションID、ランプ状態、表示属性、初回観測順、Hook最終観測日時、JSONL最終活動日時を保持します。
+
+既存の`LastObservedAtUtc`は、Hook最終観測日時とJSONL最終活動日時の最大値です。
+
+旧形式のスナップショットは、追加日時がない状態でも読み取れます。
 
 HUDは生のHook payload、prompt、command、tool input、cwdを受け取りません。
 
@@ -107,6 +129,34 @@ Probeは、セッションIDを匿名化し、最終更新時刻とアーカイ�
 
 Probeは、Codexの履歴ファイルを変更しません。
 
+`CodexSessionFileDiscovery`は、`CODEX_HOME\sessions`を日付フォルダー込みで再帰探索します。
+
+探索対象は、最終更新が既定30分以内の`*.jsonl`です。
+
+候補は全体で64件へ制限します。
+
+ファイル名で取得したSession IDは、既存の短縮SHA-256規則で匿名化します。
+
+確認済みの`session_meta`先頭レコードから取得したSession IDも、同じ規則で匿名化します。
+
+先頭レコードの探索は64KB以内です。
+
+候補のmtime、size、共有ロックは、候補選定と読取可否の根拠だけです。
+
+これらの値だけで`Running`を設定しません。
+
+JSONL Probeはbyte offset、未完了行、ファイル縮小、置換、先頭レコード変更を管理します。
+
+1セッションの読取は256KB、全体の1回の読取は4MBへ制限します。
+
+確認済みの`event_msg`内`task_started`と`task_complete`だけを正規化観測へ変換します。
+
+prompt、command、tool input、本文、raw JSONはStore、ログ、UIへ渡しません。
+
+未知イベント、malformed JSON、過大な1行は状態根拠にしません。
+
+`state_5.sqlite`は読み取りません。
+
 Storeは、アーカイブ済みセッションをHUDの一覧から削除します。
 
 Hookで最近観測したセッションは、カタログに一時的に存在しなくてもHUDの一覧に保持します。
@@ -122,6 +172,16 @@ Hookで最近観測したセッションは、カタログに一時的に存在�
 Hook観測時刻とカタログ最終更新時刻がどちらもないセッションは、HUDへ表示しません。
 
 カタログを読み取れない場合、Storeはその周期の自動削除を実行しません。
+
+探索が部分的な場合、Storeは非アーカイブの古い状態を削除しません。
+
+`archived_sessions`のSessionは、探索が部分的でも即時削除します。
+
+Hookの`PermissionRequest`と`Stop`による`NeedsAttention`は、JSONLで解除しません。
+
+JSONLの明示的な開始・活動イベントは、Hook未観測セッションを`Running`として作成できます。
+
+JSONLの完了・中断イベントは、新しいHookの注意状態がない場合だけ`Idle`へ反映します。
 
 HUDはCodexプロセスを監視しません。
 

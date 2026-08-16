@@ -53,7 +53,9 @@ public sealed class SessionStateSnapshotStore
                     state.FirstSeenOrder)
                 {
                     Appearance = state.Appearance,
-                    LastObservedAtUtc = state.LastObservedAtUtc
+                    LastObservedAtUtc = state.LastObservedAtUtc,
+                    LastHookObservedAtUtc = state.LastHookObservedAtUtc,
+                    LastJsonlActivityAtUtc = state.LastJsonlActivityAtUtc
                 })
                 .ToArray();
         }
@@ -78,7 +80,9 @@ public sealed class SessionStateSnapshotStore
                 state.SessionId,
                 state.State,
                 state.FirstSeenOrder,
-                state.LastObservedAtUtc)
+                state.LastObservedAtUtc,
+                state.LastHookObservedAtUtc,
+                state.LastJsonlActivityAtUtc)
             {
                 Appearance = state.Appearance
             }))
@@ -93,7 +97,9 @@ public sealed class SessionStateSnapshotStore
                 state.SessionId,
                 state.State,
                 state.FirstSeenOrder,
-                state.LastObservedAtUtc)
+                state.LastObservedAtUtc,
+                state.LastHookObservedAtUtc,
+                state.LastJsonlActivityAtUtc)
             {
                 Appearance = state.Appearance
             })
@@ -142,7 +148,9 @@ public sealed class SessionStateSnapshotStore
         string SessionId,
         LampState State,
         long FirstSeenOrder,
-        DateTimeOffset? LastObservedAtUtc)
+        DateTimeOffset? LastObservedAtUtc,
+        DateTimeOffset? LastHookObservedAtUtc = null,
+        DateTimeOffset? LastJsonlActivityAtUtc = null)
     {
         public LampAppearance Appearance { get; init; } = LampAppearance.Default;
     }

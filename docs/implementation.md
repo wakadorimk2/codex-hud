@@ -26,7 +26,7 @@ dotnet run --project .\tests\CodexHud.Tests\CodexHud.Tests.csproj -c Release
 python -m unittest discover -s experiments -p 'test_*.py'
 ```
 
-テストは、三状態と表示属性の描画、可視ピクセル、複数セッションの独立遷移、状態優先順、`SessionEnd`の猶予と削除中止、状態スナップショットの復元、時刻なし旧スナップショットの除外、表示属性なし旧スナップショットの復元、セッションカタログの匿名化とアーカイブ照合、5分整理、Hook payloadの匿名化、Named Pipe、bridgeの終了コード、DPI配置、折返し、位置の永続化を確認します。
+テストは、三状態と表示属性の描画、可視ピクセル、複数セッションの独立遷移、状態優先順、`SessionEnd`の猶予と削除中止、状態スナップショットの復元、HookとJSONLの最終観測日時、時刻なし旧スナップショットの除外、表示属性なし旧スナップショットの復元、セッションカタログの匿名化とアーカイブ照合、日付フォルダー横断の64件制限、増分JSONL、未完了行、malformed JSON、未知イベント、過大な1行、JSONLによる`NeedsAttention`保護、部分探索の非削除、5分整理、Hook payloadの匿名化、Named Pipe、bridgeの終了コード、DPI配置、折返し、位置の永続化を確認します。
 
 ## Distribution
 
@@ -80,6 +80,8 @@ HUD起動時は`%LOCALAPPDATA%\CodexHud\sessions.json`から、有効な最終�
 
 HUD起動後にセッションカタログを一回読み取り、アーカイブ済みセッションを削除します。
 
+HUD起動後にbounded JSONL探索と増分JSONL読取を実行します。
+
 初回カタログ整理はUIスレッド外で実行します。
 
 Hook受信後、Hook状態をStoreへ適用した直後にセッションカタログ照合を非同期で要求します。
@@ -89,6 +91,8 @@ Hook受信後、Hook状態をStoreへ適用した直後にセッションカタ�
 連続Hook中の照合要求は一件へまとめます。
 
 HUDは1分ごとにもセッションカタログを読み取ります。
+
+JSONL変更は、`Changed`、`Created`、`Deleted`、`Renamed`、`Error`を照合Queueへ通知します。
 
 1分周期の照合は、Hookがない場合の安全網です。
 
@@ -101,6 +105,14 @@ Hookで最近観測したセッションは、カタログに一時的に存在�
 Hook観測時刻とカタログ最終更新時刻がどちらもないセッションは、HUDへ表示しません。
 
 カタログを読み取れない場合、その周期の自動削除を実行しません。
+
+JSONLの開始・活動観測はHook未観測セッションを表示できます。
+
+JSONLの完了・中断観測は、Hookの新しい`NeedsAttention`を解除しません。
+
+Hook最終観測日時とJSONL最終活動日時は別に保存します。
+
+`LastObservedAtUtc`は両者の最大値を保持します。
 
 旧スナップショットに最終観測日時がないセッションは、HUDへ表示しません。
 
