@@ -11,7 +11,7 @@ namespace CodexHud;
 
 public partial class App : System.Windows.Application
 {
-    private static readonly TimeSpan FullRefreshInterval = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan FullRefreshInterval = TimeSpan.FromSeconds(3);
 
     private Mutex? _instanceMutex;
     private bool _ownsInstanceMutex;
@@ -37,8 +37,7 @@ public partial class App : System.Windows.Application
                 "--hook",
                 StringComparison.OrdinalIgnoreCase)))
         {
-            Environment.ExitCode = 0;
-            Shutdown(0);
+            Environment.Exit(0);
             return;
         }
 

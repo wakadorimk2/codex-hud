@@ -26,7 +26,7 @@ CODEX_HOME\sessions\**\*.jsonl ──┐
                                   ├─> discovery ──┐
 CODEX_HOME\state_5.sqlite ───────┘               │
                                                   ├─> SessionMonitorEngine
-FileSystemWatcher / 30秒周期 ─────────────────────┘
+FileSystemWatcher / 3秒周期 ─────────────────────┘
                                                           │
                                                           ├─> MainWindow
                                                           └─> tray counts
@@ -34,7 +34,7 @@ FileSystemWatcher / 30秒周期 ────────────────
 
 通常の変更は変更パスだけを`PollPaths(paths, now)`へ渡します。
 
-起動、作成、削除、名前変更、Watcher overflow、`session_index.jsonl`変更、`state_5.sqlite`変更、30秒周期は`RefreshActiveSessions(now)`を使います。
+起動、作成、削除、名前変更、Watcher overflow、`session_index.jsonl`変更、`state_5.sqlite`変更、3秒周期は`RefreshActiveSessions(now)`を使います。
 
 `AdvanceLifecycle(now)`は活動時刻を状態へ反映し、期限切れの表示を削除します。
 

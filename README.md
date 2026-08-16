@@ -8,7 +8,7 @@ HUDはCodexを操作しません。Hookを状態同期の起点にしません�
 
 - `%CODEX_HOME%\sessions`以下のJSONLを再帰探索します。
 - `state_5.sqlite`を任意の補助根拠として読み取ります。
-- FileSystemWatcherと30秒周期の全体再探索で表示集合を同期します。
+- FileSystemWatcherと3秒周期の全体再探索で表示集合を同期します。
 - 同じセッションIDを一つのランプだけで表示します。
 - 表示集合を最近30分、最大64セッションへ制限します。
 - セッション0件でもHUDを常駐します。
@@ -37,7 +37,7 @@ sessions/**/*.jsonl ─┐
                      ├─> SessionMonitorEngine ─> MainWindow ─> SkiaSharp lamps
 state_5.sqlite  ─────┘       ▲
                              │
-              FileSystemWatcher + 30秒周期全体再探索
+              FileSystemWatcher + 3秒周期全体再探索
 ```
 
 参考方式は、[codex-monitor-hud](https://github.com/LH-03/codex-monitor-hud)のローカルJSONL探索、増分読取、定期照合の考え方に合わせています。

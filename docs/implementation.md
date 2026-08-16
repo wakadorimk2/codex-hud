@@ -26,14 +26,14 @@
 - Completed保持: 120秒
 - Aborted保持: 120秒
 - ReadError保持: 30秒
-- 全体再探索: 30秒
+- 全体再探索: 3秒
 - JSONL 1ファイル読取上限: 256KB
 - JSONL 1回全体読取上限: 4MB
 - JSONL 1行上限: 64KB
 
 ## 起動経路
 
-通常起動では、HUD、Watcher、監視ワーカー、30秒タイマーを起動します。
+通常起動では、HUD、Watcher、監視ワーカー、3秒タイマーを起動します。
 
 セッションが0件でもウィンドウを表示します。
 
@@ -52,7 +52,7 @@ Watcherは次のイベントを変更パスへ変換します。
 - `session_index.jsonl`: 全体再探索
 - `state_5.sqlite`: 全体再探索
 - Watcher overflow: 全体再探索
-- 30秒周期: 全体再探索
+- 3秒周期: 全体再探索
 
 複数の変更は`ConcurrentDictionary`でまとめます。
 

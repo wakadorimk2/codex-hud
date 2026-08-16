@@ -25,6 +25,7 @@ internal static class Program
             ("session index alone does not create a lamp", TestSessionIndexIsNotSource),
             ("watcher reports changed JSONL paths", TestSessionFileWatcher),
             ("installer and app do not use the Hook path", TestHookPathDisabled),
+            ("--hook exits immediately without starting the HUD", TestHookExitsImmediately),
             ("lamp layout and placement remain stable", TestLayoutAndPlacement)
         };
 
@@ -365,6 +366,31 @@ internal static class Program
         Assert.False(app.Contains("NamedPipe", StringComparison.Ordinal));
         Assert.False(installer.Contains("hooks.json", StringComparison.OrdinalIgnoreCase));
         Assert.False(uninstaller.Contains("hooks.json", StringComparison.OrdinalIgnoreCase));
+        return Task.CompletedTask;
+    }
+
+    private static Task TestHookExitsImmediately()
+    {
+        var appPath = Path.Combine(
+            FindRepositoryRoot(),
+            "src",
+            "CodexHud",
+            "bin",
+            "Release",
+            "net10.0-windows",
+            "CodexHud.exe");
+        Assert.True(File.Exists(appPath), $"HUD executable was not found: {appPath}");
+
+        using var process = Process.Start(new ProcessStartInfo
+        {
+            FileName = appPath,
+            UseShellExecute = true,
+            CreateNoWindow = true,
+            Arguments = "--hook"
+        });
+        Assert.True(process is not null, "The --hook process did not start.");
+        Assert.True(process!.WaitForExit(2000), "The --hook process did not exit within 2 seconds.");
+        Assert.Equal(0, process.ExitCode);
         return Task.CompletedTask;
     }
 
