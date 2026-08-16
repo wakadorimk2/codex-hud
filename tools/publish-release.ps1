@@ -77,7 +77,6 @@ try {
     foreach ($fileName in @(
         'Install-CodexHud.ps1',
         'Uninstall-CodexHud.ps1',
-        'install-hooks.ps1',
         'INSTALL.txt'
     )) {
         $sourcePath = Join-Path $repositoryRoot "tools\$fileName"

@@ -13,8 +13,6 @@ public sealed class SkiaLampRenderer
         int pixelHeight,
         LampState fromState,
         LampState toState,
-        LampAppearance fromAppearance,
-        LampAppearance toAppearance,
         float transitionProgress,
         float phase)
     {
@@ -29,10 +27,10 @@ public sealed class SkiaLampRenderer
         var center = new SKPoint(pixelWidth / 2f, pixelHeight / 2f);
         var stateProgress = SmoothStep(Math.Clamp(transitionProgress, 0f, 1f));
         var color = Lerp(
-            GetStateColor(fromState, fromAppearance),
-            GetStateColor(toState, toAppearance),
+            GetStateColor(fromState),
+            GetStateColor(toState),
             stateProgress);
-        var motion = GetMotion(toState, toAppearance, phase);
+        var motion = GetMotion(toState, phase);
 
         DrawAmbient(canvas, center, dimension, color);
         DrawStateGlow(canvas, center, dimension, color, motion);
@@ -44,7 +42,6 @@ public sealed class SkiaLampRenderer
             dimension,
             color,
             toState,
-            toAppearance,
             phase);
     }
 
@@ -152,29 +149,23 @@ public sealed class SkiaLampRenderer
         float dimension,
         SKColor color,
         LampState state,
-        LampAppearance appearance,
         float phase)
     {
-        if (appearance == LampAppearance.Muted)
-        {
-            return;
-        }
-
-        if (state == LampState.Idle)
+        if (!HasMotion(state))
         {
             return;
         }
 
         var radius = dimension * 0.385f;
-        var startAngle = phase * (state == LampState.NeedsAttention ? 32f : 48f) - 90f;
-        var sweepAngle = state == LampState.NeedsAttention ? 142f : 76f;
+        var startAngle = phase * 42f - 90f;
+        var sweepAngle = 76f;
         using var paint = new SKPaint
         {
             IsAntialias = true,
             Style = SKPaintStyle.Stroke,
             StrokeCap = SKStrokeCap.Round,
             StrokeWidth = MathF.Max(1f, dimension * 0.045f),
-            Color = color.WithAlpha(state == LampState.NeedsAttention ? (byte)224 : (byte)170)
+            Color = color.WithAlpha(170)
         };
 
         var bounds = new SKRect(
@@ -185,35 +176,35 @@ public sealed class SkiaLampRenderer
         canvas.DrawArc(bounds, startAngle, sweepAngle, false, paint);
     }
 
-    private static SKColor GetStateColor(LampState state, LampAppearance appearance)
+    private static SKColor GetStateColor(LampState state)
     {
-        if (appearance == LampAppearance.Muted)
-        {
-            return new SKColor(82, 88, 98);
-        }
-
         return state switch
         {
-            LampState.Running => new SKColor(70, 150, 255),
-            LampState.NeedsAttention => new SKColor(255, 145, 62),
+            LampState.Active => new SKColor(70, 150, 255),
+            LampState.Listening => new SKColor(174, 112, 255),
+            LampState.Completed => new SKColor(74, 204, 123),
+            LampState.Aborted => new SKColor(242, 72, 78),
+            LampState.ReadError => new SKColor(255, 118, 54),
             _ => new SKColor(82, 88, 98)
         };
     }
 
     private static float GetMotion(
         LampState state,
-        LampAppearance appearance,
         float phase)
     {
-        if (state == LampState.Idle || appearance == LampAppearance.Muted)
+        if (!HasMotion(state))
         {
             return 0f;
         }
 
         var wave = (MathF.Sin(phase * MathF.PI * 2f) + 1f) * 0.5f;
-        return state == LampState.NeedsAttention
-            ? 0.12f + wave * 0.08f
-            : 0.04f + wave * 0.045f;
+        return 0.04f + wave * 0.045f;
+    }
+
+    private static bool HasMotion(LampState state)
+    {
+        return state is LampState.Active or LampState.Listening;
     }
 
     private static SKColor Lerp(SKColor from, SKColor to, float progress)

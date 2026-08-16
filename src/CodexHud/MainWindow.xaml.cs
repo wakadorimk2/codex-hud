@@ -59,7 +59,7 @@ public partial class MainWindow : Window
 
             if (cell.Child is SkiaLampView lampView)
             {
-                lampView.SetVisualState(session.State, session.Appearance);
+                lampView.SetVisualState(session.State);
             }
 
             var row = index / layout.Columns;

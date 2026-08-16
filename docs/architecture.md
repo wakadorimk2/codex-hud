@@ -1,342 +1,163 @@
 # Codex HUD アーキテクチャ
 
-## Goal
+## 目的
 
-Codexをゲーム、イラスト、ブラウジングなどの別作業と並行して利用すると、ユーザーは現在のセッション状態を見失うことがあります。
+Codexのローカルセッション記録から、最近のユーザーセッション集合と現在状態を作ります。
 
-特に、Codexがユーザー入力または承認を待っている状態は、短い通知だけでは見逃す可能性があります。
+HUDはCodexを起動、承認、入力、操作しません。
 
-本プロジェクトは、Codexの利用方法を変更せずに、セッションの現在状態を外部から観測し、画面端の小さなHUDへ持続的に表示することを目指します。
+Hook通知は状態の正ではありません。
 
-最初の成立条件は、`WaitingForUser`と`WaitingForApproval`を外部から区別し、状態として保持できることです。
+## 責務
 
-## Non-goals
-
-現時点では、次の機能を対象にしません。
-
-- Codex自体の代替UI
-- Codexの実行管理
-- HUDからの承認操作
-- ChatGPT対応
-- Claude対応
-- モバイル通知
-- 複数PC同期
-- セッション履歴分析
-- 生産性分析
-- タスク管理
-- AI Agent orchestration
-
-HUDはCodexを操作しません。
-
-HUDは現在状態の表示と、将来の対象ウィンドウへの移動だけを扱います。
-
-## Components
-
-```text
-Codex
-  ↓
-Codex State Probe / Monitor
-  ↓
-Session State Store
-  ↓
-HUD
-  ├─ Visual notification
-  ├─ Sound notification
-  └─ Window focus
-```
-
-| コンポーネント | 主な責務 | 境界 |
+| コンポーネント | 責務 | 境界 |
 | --- | --- | --- |
-| Codex | 既存のセッション実行、turn実行、ユーザー対話 | HUDのために利用方法を変えない |
-| Codex State Probe / Monitor | `.codex`、App Server、CLIなどのCodex固有情報源を観測する | UIを描画しない。Codexをラップまたは操作しない |
-| Session State Store | セッションごとの現在状態、状態遷移、判断根拠を保持する | 情報源ごとのファイル形式を直接解釈しない |
-| HUD | Storeの現在状態をPassive modeまたはExpanded modeで表示し、タスクトレイからHUDの表示を制御する | Codex固有情報源を直接参照しない。Codexを操作しない |
-| Visual notification | 状態に応じて視覚的な注意度を変える | 現在状態を変更しない |
-| Sound notification | 将来、状態遷移時に補助通知を出す | 繰り返し音や操作を妨げる音を既定にしない |
-| Window focus | 将来、ユーザーのクリックで対象ウィンドウへ移動する | ユーザー操作なしにフォーカスを奪わない |
+| `CodexSessionFileDiscovery` | `sessions`以下のJSONLを再帰探索し、最近の候補を作る | UIを持たない |
+| `CodexSessionEventProbe` | JSONLを増分読取し、許可したイベントだけを正規化する | 本文とraw JSONを保持しない |
+| `WindowsSessionActivitySource` | `state_5.sqlite`からSQLite活動を読み取る | 読み取り専用。JSONLを必須にしない |
+| `SessionMonitorEngine` | セッション集合、状態遷移、ライフサイクル、表示順を管理する | Hook、UI、Codex操作を持たない |
+| `CodexSessionFileWatcher` | JSONL、`session_index.jsonl`、`state_5.sqlite`の変更を通知する | 状態を判断しない |
+| `MainWindow` | Engineの一意な表示集合をランプへ反映する | `.codex`とSQLiteを直接読まない |
 
-## Production implementation
-
-productionの最小経路は、次の固定境界を使います。
+## 現行データフロー
 
 ```text
-Codex Hook
-  → CodexHud.exe --hook
-  → sanitized HookObservation
-  → Named Pipe
-  → SessionStateStore
-  → WPF MainWindow
-  → SkiaSharpLampRenderer
+CODEX_HOME\sessions\**\*.jsonl ──┐
+                                  ├─> discovery ──┐
+CODEX_HOME\state_5.sqlite ───────┘               │
+                                                  ├─> SessionMonitorEngine
+FileSystemWatcher / 30秒周期 ─────────────────────┘
+                                                          │
+                                                          ├─> MainWindow
+                                                          └─> tray counts
 ```
 
-JSONLの補助経路は、Hook経路と独立しています。
+通常の変更は変更パスだけを`PollPaths(paths, now)`へ渡します。
 
-```text
-sessions/**/*.jsonl
-  → bounded CodexSessionFileDiscovery
-  → incremental CodexSessionEventProbe
-  → normalized JsonlActivityObservation
-  → SessionStateStore
-```
+起動、作成、削除、名前変更、Watcher overflow、`session_index.jsonl`変更、`state_5.sqlite`変更、30秒周期は`RefreshActiveSessions(now)`を使います。
 
-`SessionCatalogReconciliationQueue`は、Hook受信、起動、JSONL変更、1分周期の要求を一つの照合処理へまとめます。
+`AdvanceLifecycle(now)`は活動時刻を状態へ反映し、期限切れの表示を削除します。
 
-`CodexSessionFileWatcher`は、`Changed`、`Created`、`Deleted`、`Renamed`、`Error`で照合を要求します。
+## 表示集合
 
-Watcherは状態を推測しません。
+Engineは次の和集合を作ります。
 
-`SessionCatalogReconciler`は、カタログ読取、JSONL候補探索、増分JSONL読取、Store適用、整理をこの順序で実行します。
+1. 最終更新が通常30分以内のJSONL。
+2. SQLiteの未アーカイブ、ユーザー由来、通常30分以内の活動行。
 
-`HookBridge`は標準入力を一回読みます。
+全体の表示上限は64セッションです。
 
-`HookObservationParser`はイベント名を許可済みの列挙値へ変換します。
+セッションIDを辞書キーにします。
 
-セッション識別子はSHA-256の短縮値へ変換します。
+同じIDのJSONLが複数ある場合は、最終更新が新しい候補を使います。
 
-prompt、command、tool input、cwd、生のHook JSONはNamed Pipeへ渡しません。
+SQLiteの`rollout_path`は`CODEX_HOME\sessions`配下であることを確認します。
 
-`NamedPipeStateServer`は一つのsanitized messageを受信します。
+SQLiteのIDをSHA-256短縮値へ変換し、JSONLファイル名のIDと一致することを確認します。
 
-`SessionStateStore`はHook JSONを解釈しません。
+`session_meta.payload.source.subagent`が確認できるJSONLは除外します。
 
-HUDはStoreのセッション一覧だけを読み取ります。
+`session_index.jsonl`の古い記録だけでは表示集合を保持しません。
 
-`SessionLampState`は、匿名化済みセッションID、ランプ状態、表示属性、初回観測順、Hook最終観測日時、JSONL最終活動日時を保持します。
+探索が部分的な場合、既存の表示を即時に全削除しません。
 
-既存の`LastObservedAtUtc`は、Hook最終観測日時とJSONL最終活動日時の最大値です。
+## 情報源の境界
 
-旧形式のスナップショットは、追加日時がない状態でも読み取れます。
+### JSONL
 
-HUDは生のHook payload、prompt、command、tool input、cwdを受け取りません。
+`CodexSessionEventProbe`はファイルごとのbyte offsetを保持します。
 
-HUDの表示集合と表示数の正は、匿名化済みセッションIDをキーにしたSession State Storeです。
+ファイル縮小、置換、先頭レコード変更を検出した場合はcursorをリセットします。
 
-Hook受信後、AppはStoreへの適用後にセッションカタログ照合を非同期で要求します。
+1ファイルの読取上限は256KBです。
 
-カタログ照合は単一ワーカーで実行し、連続Hook中の要求を一件へまとめます。
+1回の全体読取上限は4MBです。
 
-Named Pipeが停止しても、Hook bridgeは終了コード0を返します。
+1行の上限は64KBです。
 
-`SessionStart`だけが、必要な場合にHUDプロセスを起動します。
+未完了行は次回の読取まで保持します。
 
-`SessionStart`のbridgeは、HUD起動直後のNamed Pipe接続を送信前だけ再試行します。
+malformed JSON、未知イベント、過大行は状態根拠にしません。
 
-Named Pipe接続後の書き込み失敗は再送しません。
+JSONLから採用するイベントは、`task_started`、非silentな`task_complete`、`turn_aborted`です。
 
-`CodexSessionCatalogProbe`は、`session_index.jsonl`と`archived_sessions`を読み取ります。
+silentな`task_complete`は無視します。
 
-Probeは、セッションIDを匿名化し、最終更新時刻とアーカイブ状態だけをStoreへ渡します。
+### SQLite
 
-Probeは、Codexの履歴ファイルを変更しません。
+`WindowsSessionActivitySource`は`winsqlite3.dll`を読み取り専用で使います。
 
-`CodexSessionFileDiscovery`は、`CODEX_HOME\sessions`を日付フォルダー込みで再帰探索します。
+必要な列は、セッションID、`rollout_path`、`updated_at_ms`だけです。
 
-探索対象は、最終更新が既定30分以内の`*.jsonl`です。
+busy timeoutは短く設定します。
 
-候補は全体で64件へ制限します。
+DLL不足、DB不足、schema不一致、lock、読取エラーでは空の補助結果を返します。
 
-ファイル名で取得したSession IDは、既存の短縮SHA-256規則で匿名化します。
+EngineはJSONLだけで継続します。
 
-確認済みの`session_meta`先頭レコードから取得したSession IDも、同じ規則で匿名化します。
+SQLiteの活動は、JSONLの最終更新が古くてもセッションを保持できます。
 
-先頭レコードの探索は64KB以内です。
+## 状態モデル
 
-候補のmtime、size、共有ロックは、候補選定と読取可否の根拠だけです。
-
-これらの値だけで`Running`を設定しません。
-
-JSONL Probeはbyte offset、未完了行、ファイル縮小、置換、先頭レコード変更を管理します。
-
-1セッションの読取は256KB、全体の1回の読取は4MBへ制限します。
-
-確認済みの`event_msg`内`task_started`と`task_complete`だけを正規化観測へ変換します。
-
-prompt、command、tool input、本文、raw JSONはStore、ログ、UIへ渡しません。
-
-未知イベント、malformed JSON、過大な1行は状態根拠にしません。
-
-`state_5.sqlite`は読み取りません。
-
-Storeは、アーカイブ済みセッションをHUDの一覧から削除します。
-
-Hookで最近観測したセッションは、カタログに一時的に存在しなくてもHUDの一覧に保持します。
-
-カタログに存在しないセッションは、最終Hook観測から5分以上経過した場合に削除します。
-
-カタログに存在するセッションは、最終Hook観測またはカタログ最終更新から5分以上経過した場合に削除します。
-
-初回照合とHook起点照合は、HUDのUIスレッド外で実行します。
-
-1分周期の照合は、Hookがない場合の安全網として維持します。
-
-Hook観測時刻とカタログ最終更新時刻がどちらもないセッションは、HUDへ表示しません。
-
-カタログを読み取れない場合、Storeはその周期の自動削除を実行しません。
-
-探索が部分的な場合、Storeは非アーカイブの古い状態を削除しません。
-
-`archived_sessions`のSessionは、探索が部分的でも即時削除します。
-
-Hookの`PermissionRequest`と`Stop`による`NeedsAttention`は、JSONLで解除しません。
-
-JSONLの明示的な開始・活動イベントは、Hook未観測セッションを`Running`として作成できます。
-
-JSONLの完了・中断イベントは、新しいHookの注意状態がない場合だけ`Idle`へ反映します。
-
-HUDはCodexプロセスを監視しません。
-
-## Lamp state projection
-
-この実装のランプは、研究用の六状態モデルを三状態へ投影します。
-
-| Hook event | Lamp state | Appearance |
+| 状態 | 根拠 | 既定の鮮度または保持 |
 | --- | --- | --- |
-| `SessionStart`、`UserPromptSubmit` | `Running` | `Default` |
-| `PermissionRequest` | `NeedsAttention` | `Default` |
-| `Stop` | `NeedsAttention` | `Muted` |
-| `SessionEnd` | `Idle` | `Default` |
-| malformed、unknown | 現在状態を維持 | 現在属性を維持 |
+| `Active` | `task_started`、または新しいSQLite活動 | JSONL 12秒。SQLite 3分 |
+| `Listening` | 最近のファイル活動、読取待ち、identity保留 | 90秒 |
+| `Idle` | 最近の活動なし | セッションが集合にある間 |
+| `Completed` | 非silentな`task_complete` | 120秒 |
+| `Aborted` | `turn_aborted` | 120秒 |
+| `ReadError` | JSONLのI/O読取エラー | 30秒 |
 
-`LampState`は状態と一覧優先度を表します。
+`Listening`は承認待ち、質問待ち、回答待ちを断定しません。
 
-`LampAppearance`は表示方法を表します。
+状態の正はEngineの現在状態です。
 
-`Stop`は`NeedsAttention`の優先度を維持し、`Muted`で暗いグレーの静止表示にします。
+イベントは状態判断の根拠です。
 
-複数セッションがある場合、Storeは`NeedsAttention`、`Running`、`Idle`の順で一覧を返します。
+ファイルが存在するだけでは`Active`にしません。
 
-同じ状態のセッションは、初回観測順を維持します。
+無更新だけで`Completed`、`Aborted`、`ReadError`へ遷移させません。
 
-`SessionEnd`は対象セッションを短時間`Idle`として保持します。
+## ランプ表示
 
-約240ms後に対象セッションを一覧から削除します。
+`LampState`を直接固定色へ変換します。
 
-猶予中の`UserPromptSubmit`は削除を中止し、対象セッションを`Running`へ戻します。
+`LampAppearance`、Muted、Stop専用表示規則はありません。
 
-`SessionEnd`の一時的な`Idle`状態は保存しません。
+`Active`と`Listening`だけが弱く動きます。
 
-実環境で`SessionEnd`が届かない場合も、Session Catalog Cleanupは別の期限判定を行います。
+`Idle`、`Completed`、`Aborted`、`ReadError`は状態色を維持します。
 
-`NeedsAttention`は通常の状態更新では時間経過で解除しません。
+表示順は、`Active`、`Listening`、`ReadError`、`Aborted`、`Completed`、`Idle`です。
 
-Hookで最近観測したセッションは、カタログに一時的に存在しなくてもHUD一覧に保持します。
+同じ状態では`FirstSeenOrder`を使います。
 
-カタログに存在しないセッションは、最終Hook観測から5分以上経過した場合にHUD一覧から削除します。
+## Hook互換
 
-カタログに存在するセッションの5分超過による自動整理は、状態解除ではなくHUD一覧からの削除です。
+通常起動はHookを待ちません。
 
-次の`UserPromptSubmit`または`SessionStart`で、そのセッションを`Running`と`Default`へ戻します。
+`CodexHud.exe --hook`は終了コード0で即時終了します。
 
-### 正規化された観測
+状態更新、HUD起動、Named Pipe送信をしません。
 
-Probeは情報源ごとの形式を、次の概念情報へ正規化します。
+インストーラーとアンインストーラーはHook設定を読み書きしません。
 
-- セッションID。値は不透明な識別子として扱います。
-- 表示名またはプロジェクト名。取得できない場合は省略します。
-- 現在状態。
-- 観測時刻。
-- 状態判断の根拠。情報源、イベント種別、該当位置を含めます。
+`tools/install-hooks.ps1`は旧方式の手動資料として残します。
 
-これは文書上の責務境界です。
+## セキュリティ境界
 
-現段階では、公開API、プラグイン契約、汎用フレームワークを実装しません。
+次の値をEngine、ログ、UIへ渡しません。
 
-## State Model
+- prompt
+- 回答本文
+- command
+- tool input
+- cwd
+- raw JSONL
+- SQLiteの未使用列
 
-状態の正は、Session State Storeが保持する現在状態です。
+セッションIDは匿名化済み値だけをUIへ渡します。
 
-通知イベントは、状態を判断した根拠です。
+## 参考
 
-通知イベントそのものを、HUDが表示する正のデータにしません。
-
-| 状態 | 意味 | 遷移条件 |
-| --- | --- | --- |
-| `Unknown` | 信頼できる状態根拠がまだない状態です | 新しいセッションの初期状態です。根拠不足時にも使います |
-| `Running` | 現在のturnが実行中である根拠があります | セッション開始、新しいturn、待機解除後の実行イベントで設定します |
-| `WaitingForUser` | Codexが通常のユーザー回答を待っています | Codexが質問または回答要求を明示したときに設定します |
-| `WaitingForApproval` | Codexが承認結果を待っています | command approvalまたはfile change approvalを明示したときに設定します |
-| `Completed` | 最新のturnが明示的に完了しました | turn完了の根拠を観測したときに設定します。セッションプロセスの終了だけでは設定しません |
-| `Error` | Codexまたはturnの明示的なエラーを観測しました | エラーの根拠を観測したときに設定します。無更新だけでは設定しません |
-
-`WaitingForApproval`のcommand approvalとfile change approvalは、状態を増やさず、判断根拠のイベント種別で区別します。
-
-### 状態遷移
-
-```text
-Unknown ── active turn evidence ──> Running
-Unknown ── user question ─────────> WaitingForUser
-Unknown ── approval request ───────> WaitingForApproval
-Running ── user question ─────────> WaitingForUser
-Running ── approval request ───────> WaitingForApproval
-Running ── explicit completion ───> Completed
-Running ── explicit error ─────────> Error
-WaitingForUser ── new turn ────────> Running
-WaitingForApproval ── new turn ────> Running
-Completed/Error ── new turn ───────> Running
-```
-
-次の規則を適用します。
-
-- 明示的な状態根拠がない場合、タイムアウトだけで状態を変更しません。
-- 新しいセッションで明示的な待機根拠を最初に観測した場合は、`Unknown`から対応する待機状態へ直接遷移できます。
-- `WaitingForUser`と`WaitingForApproval`は、状態遷移として時間経過だけで解除しません。
-- Hookで最近観測したセッションは、カタログに一時的に存在しなくてもHUD一覧に保持します。
-- カタログに存在しないセッションは、最終Hook観測から5分以上経過した場合にHUD一覧から削除します。
-- カタログに存在するセッションは、時刻がある場合に最終活動から5分でHUD一覧から削除します。
-- Hook観測時刻とカタログ最終更新時刻がない旧スナップショットは復元しません。
-- 承認拒否、キャンセル、再試行の扱いは、Codexから観測できる明示的な結果に従います。
-- 新しいturnの開始を観測した場合は`Running`へ戻します。
-- `Completed`は最新turnの完了を示します。Codexアプリ全体の終了を意味しません。
-- `Error`は明示的なエラーを示します。次のturnを観測した場合は`Running`へ戻します。
-
-## Detection boundary
-
-Codex固有の検知処理をProbe内部に閉じ込めます。
-
-HUDは、Probeの情報源が`.codex`ファイル、FileSystemWatcher、App Server、CLI出力のどれであるかを知りません。
-
-最小構成は次の境界です。
-
-```text
-Codex-specific observation
-  → normalized observation
-  → Session State Store
-  → HUD read model
-```
-
-将来、検知方式を変更する場合も、変更対象は原則としてProbe側です。
-
-プロセスやHWNDは、セッションIDと対象ウィンドウを対応付ける補助根拠として扱います。
-
-プロセスやHWNDだけで、Codexの状態を決定しません。
-
-現段階では、一つの検知方式を検証するための最小実装を優先します。
-
-過剰なプラグイン基盤、汎用イベントバス、他エージェント向け共通モデルは作りません。
-
-## Windows integration
-
-Windows固有機能は、Probeの状態取得が成立した後に必要な範囲で選定します。
-
-| 候補 | 適している理由 | 未知の点 |
-| --- | --- | --- |
-| `.NET` | Windowsプロセス、ファイル監視、アプリケーションライフサイクルを扱いやすい | 対象情報源の実際の更新頻度と権限 |
-| `WPF` | 小さな常駐ウィンドウ、Always on top、入力、DPI対応を検討しやすい | 全画面ゲーム、複数モニター、表示負荷 |
-| `Win32 API` | HWND、ウィンドウ位置、アクティブウィンドウ、フォーカス移動を扱える | フォーカス奪取、権限差、ゲームとの相互作用 |
-| `WebView2` | 状態一覧やExpanded modeを柔軟に表現できる | ランタイム依存、メモリ、透明オーバーレイとの相性 |
-
-Always on topは、ユーザーの作業を妨げない表示方法とセットで検証します。
-
-フォーカス移動は、ユーザーがHUDをクリックした場合だけ実行する方針です。
-
-ゲーム中の表示は、入力を奪わないこと、大きなポップアップを出さないこと、DPIと複数モニターを考慮することを条件にします。
-
-通知音は補助機能です。
-
-通知音が状態の正になることはありません。
-
-## First milestone
-
-最初のマイルストーンは、Codexがユーザー入力または承認を待ったことを外部から検知し、`WaitingForUser`または`WaitingForApproval`として保持することです。
-
-HUDの完成、音通知、フォーカス移動は、このマイルストーンの後に扱います。
+探索、増分読取、定期照合、SQLite補助源の設計は、[codex-monitor-hud](https://github.com/LH-03/codex-monitor-hud)を参考にしています。

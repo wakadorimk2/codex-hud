@@ -11,18 +11,19 @@ Install
 
    powershell -NoProfile -File .\Install-CodexHud.ps1
 
-The installer shows a Hook dry-run before it changes hooks.json.
-Type Y only after you confirm the event and command list.
-Type N to keep hooks.json unchanged.
+The installer does not read or change hooks.json.
+It does not register a new Hook.
+It does not remove an existing Hook.
 
 The installer creates or updates the Start menu shortcut named Codex HUD.
 It stores the app under %LOCALAPPDATA%\CodexHud\App.
-It keeps position.json and sessions.json under %LOCALAPPDATA%\CodexHud.
+It keeps position.json under %LOCALAPPDATA%\CodexHud.
+The HUD rebuilds its session set from local Codex records at every start.
 
 Uninstall
 Run:
 
    powershell -NoProfile -File .\Uninstall-CodexHud.ps1
 
-The uninstaller removes only the installed HUD Hook after confirmation.
-It keeps unrelated Hooks, position.json, and sessions.json.
+The uninstaller does not change Hook settings.
+It keeps position.json and unrelated local files.

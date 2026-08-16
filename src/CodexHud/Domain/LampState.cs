@@ -2,7 +2,10 @@ namespace CodexHud.Domain;
 
 public enum LampState
 {
+    Active,
+    Listening,
     Idle,
-    Running,
-    NeedsAttention
+    Completed,
+    Aborted,
+    ReadError
 }

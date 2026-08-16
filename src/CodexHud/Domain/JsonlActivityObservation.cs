@@ -11,4 +11,5 @@ public enum JsonlActivityKind
 public sealed record JsonlActivityObservation(
     string SessionId,
     JsonlActivityKind Kind,
-    DateTimeOffset ObservedAtUtc);
+    DateTimeOffset ObservedAtUtc,
+    bool IsSilent = false);

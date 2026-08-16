@@ -1,24 +1,80 @@
-# Codex HUD production実装
+# 実装メモ
 
-## Stack
+## 実装構成
 
-- Target Framework: `net10.0-windows`
-- UI shell: WPF
-- Task tray: Windows Forms `NotifyIcon`
-- Application icon: `src/CodexHud/Assets/CodexHud.ico`
-- Rendering: SkiaSharp 4.150.1
-- WPF integration: SkiaSharp.Views.WPF 4.150.1
-- Windows native assets: SkiaSharp.NativeAssets.Win32 4.150.1
-- IPC: Windows Named Pipe
-- State: SessionStateStore
+| 領域 | 主なファイル |
+| --- | --- |
+| 起動と常駐 | `src/CodexHud/App.xaml.cs` |
+| セッション集合と状態 | `src/CodexHud/Infrastructure/SessionMonitorEngine.cs` |
+| JSONL探索 | `src/CodexHud/Infrastructure/CodexSessionFileDiscovery.cs` |
+| JSONL増分読取 | `src/CodexHud/Infrastructure/CodexSessionEventProbe.cs` |
+| SQLite補助源 | `src/CodexHud/Infrastructure/WindowsSessionActivitySource.cs` |
+| FileSystemWatcher | `src/CodexHud/Infrastructure/CodexSessionFileWatcher.cs` |
+| 監視処理の直列化 | `src/CodexHud/Infrastructure/SessionMonitorWorkQueue.cs` |
+| ランプ描画 | `src/CodexHud/Rendering/SkiaLampRenderer.cs`、`SkiaLampView.cs` |
+| UI | `src/CodexHud/MainWindow.xaml.cs` |
 
-初回restoreはNuGetへ接続します。
+旧Store、Named Pipe、HookBridge、Hookスナップショットは通常経路から削除しました。
 
-`SkiaSharp.Views.WPF`の依存パッケージについて、現在のrestoreではNU1701警告が出ます。
+## 既定値
 
-Release buildは成功します。
+- JSONL探索窓: 30分
+- 表示上限: 64セッション
+- SQLite活動鮮度: 3分
+- JSONLのActive鮮度: 12秒
+- Listening鮮度: 90秒
+- Completed保持: 120秒
+- Aborted保持: 120秒
+- ReadError保持: 30秒
+- 全体再探索: 30秒
+- JSONL 1ファイル読取上限: 256KB
+- JSONL 1回全体読取上限: 4MB
+- JSONL 1行上限: 64KB
 
-## Build and test
+## 起動経路
+
+通常起動では、HUD、Watcher、監視ワーカー、30秒タイマーを起動します。
+
+セッションが0件でもウィンドウを表示します。
+
+起動時に全体再探索を一度要求します。
+
+`--hook`では終了コード0で即時終了します。
+
+`--hook`は状態更新、HUD起動、IPC送信をしません。
+
+## 同期経路
+
+Watcherは次のイベントを変更パスへ変換します。
+
+- JSONLの通常変更: 増分読取
+- JSONLの作成、削除、名前変更: 全体再探索
+- `session_index.jsonl`: 全体再探索
+- `state_5.sqlite`: 全体再探索
+- Watcher overflow: 全体再探索
+- 30秒周期: 全体再探索
+
+複数の変更は`ConcurrentDictionary`でまとめます。
+
+監視処理は一つのワーカーで実行します。
+
+UI更新はWPF Dispatcherへ戻します。
+
+## 表示集合
+
+JSONL候補とSQLite活動をセッションIDで結合します。
+
+同じIDの候補は一つへ統合します。
+
+全体を64件へ制限します。
+
+古い`session_index.jsonl`だけではセッションを保持しません。
+
+`%LOCALAPPDATA%\CodexHud\sessions.json`を読みません。
+
+既存の`position.json`は位置保存に使います。
+
+## テスト
 
 ```powershell
 dotnet build .\src\CodexHud\CodexHud.csproj -c Release
@@ -26,156 +82,21 @@ dotnet run --project .\tests\CodexHud.Tests\CodexHud.Tests.csproj -c Release
 python -m unittest discover -s experiments -p 'test_*.py'
 ```
 
-テストは、三状態と表示属性の描画、可視ピクセル、複数セッションの独立遷移、状態優先順、`SessionEnd`の猶予と削除中止、状態スナップショットの復元、HookとJSONLの最終観測日時、時刻なし旧スナップショットの除外、表示属性なし旧スナップショットの復元、セッションカタログの匿名化とアーカイブ照合、日付フォルダー横断の64件制限、増分JSONL、未完了行、malformed JSON、未知イベント、過大な1行、JSONLによる`NeedsAttention`保護、部分探索の非削除、5分整理、Hook payloadの匿名化、Named Pipe、bridgeの終了コード、DPI配置、折返し、位置の永続化を確認します。
+テストプログラムは、状態、探索、増分読取、フォールバック、Watcher、描画、配置、Hook非接触を確認します。
 
-## Distribution
+通常ビルドは既存の`NU1701`警告が3件あります。
 
-`tools/publish-release.ps1`は、`src/CodexHud/CodexHud.csproj`の`Version`を読み取ります。
+## 手動確認
 
-このスクリプトは、`Release`、`win-x64`、self-containedで`dotnet publish`を実行します。
+1. 2つ以上のCodexセッションを起動します。
+2. JSONLだけでランプが2件になることを確認します。
+3. 一方のJSONL更新後に`Active`または`Listening`になることを確認します。
+4. 非silent完了後に`Completed`になることを確認します。
+5. 中断後に`Aborted`になることを確認します。
+6. JSONLを削除した後にランプが消えることを確認します。
+7. SQLite更新時に古いJSONLセッションが保持されることを確認します。
+8. SQLiteを読めない状態でもJSONLランプが残ることを確認します。
+9. `hooks.json`のSHA-256がインストール前後で同じことを確認します。
+10. `CodexHud.exe --hook`が終了コード0で状態を変更しないことを確認します。
 
-このスクリプトは、single-fileを使用しません。
-
-このスクリプトは、SkiaSharpのNative DLLを含むフォルダー形式のZIPを作成します。
-
-```powershell
-pwsh -NoProfile -File .\tools\publish-release.ps1
-```
-
-出力先は`artifacts\CodexHud-<version>-win-x64.zip`です。
-
-ZIPの`app`フォルダーには、`CodexHud.exe`、マネージドDLL、JSON、PDB、self-contained runtime、SkiaSharp Native DLLを含めます。
-
-Release ZIPのインストール先は`%LOCALAPPDATA%\CodexHud\App`です。
-
-状態ファイルはアプリフォルダーの外にあるため、更新とアンインストールで保持します。
-
-## Runtime modes
-
-引数なしで起動すると、HUDとNamed Pipe serverを起動します。
-
-通常起動時は、タスクバーにボタンを表示せず、タスクトレイにHUDアイコンを表示します。
-
-EXEとタスクトレイは、同じ専用ICOを使用します。
-
-開発中のRelease EXEをスタートメニューから起動する場合は、`tools/install-start-menu-shortcut.ps1`を実行します。
-
-タスクトレイからHUDを表示、非表示、位置編集、終了できます。
-
-HUDを非表示にしても、Named Pipe、Session State Store、Hook受信は継続します。
-
-`--hook`で起動すると、標準入力をsanitized messageへ変換してNamed Pipeへ送信し、終了します。
-
-`SessionStart`のbridge invocationだけが、HUDプロセスの起動を試みます。
-
-`SessionStart`のbridgeは、HUD起動直後のNamed Pipe接続を送信前だけ再試行します。
-
-Named Pipe接続後の書き込み失敗は再送しません。
-
-Pipe serverが停止していても、bridgeは終了コード0を返します。
-
-HUD起動時は`%LOCALAPPDATA%\CodexHud\sessions.json`から、有効な最終観測日時を持つ`Running`と`NeedsAttention`を復元します。
-
-`SessionEnd`を受けたセッションは約240msだけ`Idle`で表示し、その後に削除します。
-
-HUD起動後にセッションカタログを一回読み取り、アーカイブ済みセッションを削除します。
-
-HUD起動後にbounded JSONL探索と増分JSONL読取を実行します。
-
-初回カタログ整理はUIスレッド外で実行します。
-
-Hook受信後、Hook状態をStoreへ適用した直後にセッションカタログ照合を非同期で要求します。
-
-カタログ照合は同時に一件だけ実行します。
-
-連続Hook中の照合要求は一件へまとめます。
-
-HUDは1分ごとにもセッションカタログを読み取ります。
-
-JSONL変更は、`Changed`、`Created`、`Deleted`、`Renamed`、`Error`を照合Queueへ通知します。
-
-1分周期の照合は、Hookがない場合の安全網です。
-
-Hookで最近観測したセッションは、カタログに一時的に存在しなくても保持します。
-
-カタログに存在しないセッションは、最終Hook観測から5分以上経過した場合に削除します。
-
-カタログに存在するセッションは、最終Hook観測またはカタログ最終更新から5分以上経過した場合に削除します。
-
-Hook観測時刻とカタログ最終更新時刻がどちらもないセッションは、HUDへ表示しません。
-
-カタログを読み取れない場合、その周期の自動削除を実行しません。
-
-JSONLの開始・活動観測はHook未観測セッションを表示できます。
-
-JSONLの完了・中断観測は、Hookの新しい`NeedsAttention`を解除しません。
-
-Hook最終観測日時とJSONL最終活動日時は別に保存します。
-
-`LastObservedAtUtc`は両者の最大値を保持します。
-
-旧スナップショットに最終観測日時がないセッションは、HUDへ表示しません。
-
-表示中のセッション数は、匿名化済みセッションIDの一意な集合から求めます。
-
-アプリ本体はHook設定を変更しません。
-
-配布版のインストーラーとアンインストーラーは、dry-runとユーザー確認の後だけHook設定を変更します。
-
-## Manual acceptance
-
-- `Idle`が作業を妨げない。
-- `Running`が弱く動く。
-- `NeedsAttention`が明確に目立つ。
-- 時刻がある`NeedsAttention`が5分未満で保持される。
-- 次の`UserPromptSubmit`で`Running`へ戻る。
-- 2つ以上のセッションを同時に表示できる。
-- `NeedsAttention`、`Running`、`Idle`の順に並ぶ。
-- 同じ状態の順序が初回観測順で安定する。
-- 画面幅を超えたランプが次の行へ折り返す。
-- `PermissionRequest`で対象セッションが橙色で脈動する。
-- `Stop`で対象セッションがグレーで静止する。
-- `Stop`が`NeedsAttention`の一覧優先度を維持する。
-- `SessionEnd`で対象セッションがグレーになり、約240ms後に消える。
-- アーカイブ済みセッションが次のHookまたはカタログ整理で消える。
-- カタログにない最近のHook観測が次のHookまたはカタログ整理で残る。
-- カタログにない5分超過セッションが次のHookまたはカタログ整理で消える。
-- カタログに存在する5分超過セッションが1分周期の整理で消える。
-- 時刻のない旧スナップショットのセッションが表示されない。
-- カタログ読み取り失敗時に既存セッションが保持される。
-- グレー表示中の`UserPromptSubmit`で対象セッションが青色へ戻る。
-- HUD再起動後に残りのセッションが復元する。
-- ランプがクリックを透過する。
-- HUDがフォーカスを奪わない。
-- Primary monitorの右下に約36 DIPで表示される。
-- 100%と150% DPIで位置とサイズが許容範囲になる。
-- `Ctrl + Alt + Shift + L`で位置編集モードへ切り替えられる。
-- 位置編集モードでグループ全体をドラッグできる。
-- 同じホットキーで位置編集モードを終了できる。
-- 再起動後も保存した位置を復元する。
-- HUD起動後にタスクトレイアイコンが表示される。
-- EXEとタスクトレイに専用HUDアイコンが表示される。
-- タスクバーにHUDのボタンが表示されない。
-- トレイメニューからHUDの表示と非表示を切り替えられる。
-- トレイメニューから位置編集モードを切り替えられる。
-- トレイメニューのツールチップに起動状態と`NeedsAttention`、`Running`、`Idle`の件数が表示される。
-- HUDを非表示にしても、Hook状態とツールチップの件数が更新される。
-- トレイメニューの`終了`でアイコンとHUDプロセスが終了する。
-- 次の`SessionStart`でHUDとトレイアイコンが再表示される。
-- 連続した`SessionStart`でトレイアイコンが重複しない。
-- `--hook`起動でトレイアイコンが残らない。
-- Release EXEがない場合、スタートメニュー登録スクリプトが終了コード1を返し、buildコマンドを表示する。
-- スタートメニュー登録スクリプトを再実行しても、`Codex HUD.lnk`が1件だけ存在する。
-- ショートカットの起動先、作業ディレクトリ、アイコンがRelease EXEを指す。
-
-通常時のクリック透過は維持します。
-
-位置編集モードだけ、一時的にクリック透過を解除します。
-
-位置は`%LOCALAPPDATA%\CodexHud\position.json`へ保存します。
-
-セッション状態は`%LOCALAPPDATA%\CodexHud\sessions.json`へ保存します。
-
-`SessionEnd`のイベント仕様は、[OpenAI公式 Hooks ドキュメント](https://learn.chatgpt.com/docs/hooks)を参照します。
-
-複数モニター最適化、サウンド、粒子、3Dは今回の対象外です。
+手動確認の結果は、自動テストの結果と分けて記録します。

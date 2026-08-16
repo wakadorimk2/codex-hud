@@ -1,16 +1,16 @@
 namespace CodexHud.Infrastructure;
 
-public sealed class SessionCatalogReconciliationQueue : IDisposable
+public sealed class SessionMonitorWorkQueue : IDisposable
 {
-    private readonly Action _reconcile;
+    private readonly Action _work;
     private readonly SemaphoreSlim _signal = new(0, 1);
     private readonly CancellationTokenSource _shutdown = new();
     private readonly Task _worker;
     private int _disposed;
 
-    public SessionCatalogReconciliationQueue(Action reconcile)
+    public SessionMonitorWorkQueue(Action work)
     {
-        _reconcile = reconcile ?? throw new ArgumentNullException(nameof(reconcile));
+        _work = work ?? throw new ArgumentNullException(nameof(work));
         _worker = Task.Run(RunAsync);
     }
 
@@ -27,11 +27,9 @@ public sealed class SessionCatalogReconciliationQueue : IDisposable
         }
         catch (SemaphoreFullException)
         {
-            // A reconciliation is already queued or running.
         }
         catch (ObjectDisposedException)
         {
-            // Shutdown won the race with a late request.
         }
     }
 
@@ -64,7 +62,7 @@ public sealed class SessionCatalogReconciliationQueue : IDisposable
             while (true)
             {
                 await _signal.WaitAsync(_shutdown.Token).ConfigureAwait(false);
-                _reconcile();
+                _work();
             }
         }
         catch (OperationCanceledException) when (_shutdown.IsCancellationRequested)

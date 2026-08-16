@@ -10,7 +10,8 @@ public sealed record SessionFileCandidate(
     string FullPath,
     DateTimeOffset LastWriteTimeUtc,
     long Length,
-    bool ReadBlocked);
+    bool ReadBlocked,
+    bool IsInternal = false);
 
 public sealed record SessionDiscoveryResult(
     IReadOnlyList<SessionFileCandidate> Candidates,
@@ -29,6 +30,7 @@ public sealed class CodexSessionFileDiscovery
 
     private readonly TimeSpan _activeWindow;
     private readonly int _maximumCandidates;
+    private readonly int _selectionLimit;
 
     public CodexSessionFileDiscovery(
         string? sessionsRoot = null,
@@ -48,14 +50,21 @@ public sealed class CodexSessionFileDiscovery
         SessionsRoot = Path.GetFullPath(
             string.IsNullOrWhiteSpace(sessionsRoot)
                 ? Path.Combine(
-                    CodexSessionCatalogProbe.GetDefaultCodexDirectory(),
+                    CodexSessionCatalogPaths.GetDefaultCodexDirectory(),
                     "sessions")
                 : sessionsRoot);
         _activeWindow = TimeSpan.FromMinutes(activeWindowMinutes);
         _maximumCandidates = maximumCandidates;
+        _selectionLimit = Math.Max(
+            maximumCandidates,
+            checked(maximumCandidates * 8));
     }
 
     public string SessionsRoot { get; }
+
+    public TimeSpan ActiveWindow => _activeWindow;
+
+    public int MaximumCandidates => _maximumCandidates;
 
     public SessionDiscoveryResult Discover(DateTimeOffset? nowUtc = null)
     {
@@ -65,7 +74,9 @@ public sealed class CodexSessionFileDiscovery
 
         if (!Directory.Exists(SessionsRoot))
         {
-            return new SessionDiscoveryResult(Array.Empty<SessionFileCandidate>(), false);
+            return new SessionDiscoveryResult(
+                Array.Empty<SessionFileCandidate>(),
+                IsComplete: true);
         }
 
         var directories = new Stack<string>();
@@ -74,20 +85,114 @@ public sealed class CodexSessionFileDiscovery
         while (directories.Count > 0)
         {
             var directory = directories.Pop();
-            EnumerateFiles(
-                directory,
-                cutoffUtc,
-                selected,
-                ref complete);
+            EnumerateFiles(directory, cutoffUtc, selected, ref complete);
             EnumerateDirectories(directory, directories, ref complete);
         }
 
         var candidates = selected.UnorderedItems
             .Select(item => item.Element)
+            .Where(candidate => !candidate.IsInternal)
+            .GroupBy(candidate => candidate.SessionId, StringComparer.Ordinal)
+            .Select(group => group
+                .OrderByDescending(candidate => candidate.LastWriteTimeUtc)
+                .ThenBy(candidate => candidate.FullPath, StringComparer.OrdinalIgnoreCase)
+                .First())
             .OrderByDescending(candidate => candidate.LastWriteTimeUtc)
             .ThenBy(candidate => candidate.FullPath, StringComparer.OrdinalIgnoreCase)
+            .Take(_maximumCandidates)
             .ToArray();
         return new SessionDiscoveryResult(candidates, complete);
+    }
+
+    public bool TryCreateCandidate(
+        string path,
+        DateTimeOffset? nowUtc,
+        bool enforceActiveWindow,
+        out SessionFileCandidate candidate)
+    {
+        candidate = null!;
+        if (string.IsNullOrWhiteSpace(path)
+            || !IsPathUnderSessionsRoot(path))
+        {
+            return false;
+        }
+
+        var fullPath = Path.GetFullPath(path);
+        if (!TryGetIdentity(fullPath, out var sessionId, out var isInternal))
+        {
+            return false;
+        }
+
+        try
+        {
+            var fileInfo = new FileInfo(fullPath);
+            fileInfo.Refresh();
+            if (!fileInfo.Exists
+                || !fileInfo.Extension.Equals(".jsonl", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            var lastWriteTimeUtc = new DateTimeOffset(
+                DateTime.SpecifyKind(fileInfo.LastWriteTimeUtc, DateTimeKind.Utc));
+            if (enforceActiveWindow
+                && lastWriteTimeUtc < (nowUtc ?? DateTimeOffset.UtcNow).ToUniversalTime() - _activeWindow)
+            {
+                return false;
+            }
+
+            candidate = new SessionFileCandidate(
+                sessionId,
+                fullPath,
+                lastWriteTimeUtc,
+                fileInfo.Length,
+                IsReadBlocked(fullPath),
+                isInternal);
+            return true;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    public bool IsPathUnderSessionsRoot(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        try
+        {
+            var fullPath = Path.GetFullPath(path);
+            var root = SessionsRoot.TrimEnd(
+                    Path.DirectorySeparatorChar,
+                    Path.AltDirectorySeparatorChar)
+                + Path.DirectorySeparatorChar;
+            return fullPath.StartsWith(root, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    public static bool TryGetFileNameSessionId(string path, out string sessionId)
+    {
+        sessionId = string.Empty;
+        var match = SessionFilePattern.Match(Path.GetFileName(path));
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        sessionId = SessionIdHasher.Hash(match.Groups["sessionId"].Value);
+        return !string.Equals(sessionId, "session-unknown", StringComparison.Ordinal);
     }
 
     private void EnumerateFiles(
@@ -103,19 +208,17 @@ public sealed class CodexSessionFileDiscovery
                          "*.jsonl",
                          SearchOption.TopDirectoryOnly))
             {
-                if (!TryGetSessionId(path, out var sessionId))
+                if (!TryCreateCandidate(
+                        path,
+                        cutoffUtc + _activeWindow,
+                        enforceActiveWindow: true,
+                        out var candidate))
                 {
                     continue;
                 }
 
-                if (!TryCreateCandidate(
-                        path,
-                        sessionId,
-                        cutoffUtc,
-                        out var candidate,
-                        out var metadataReadFailed))
+                if (candidate.IsInternal)
                 {
-                    complete &= !metadataReadFailed;
                     continue;
                 }
 
@@ -176,52 +279,6 @@ public sealed class CodexSessionFileDiscovery
         }
     }
 
-    private static bool TryCreateCandidate(
-        string path,
-        string sessionId,
-        DateTimeOffset cutoffUtc,
-        out SessionFileCandidate candidate,
-        out bool metadataReadFailed)
-    {
-        candidate = null!;
-        metadataReadFailed = false;
-
-        try
-        {
-            var fileInfo = new FileInfo(path);
-            fileInfo.Refresh();
-            if (!fileInfo.Exists)
-            {
-                return false;
-            }
-
-            var lastWriteTimeUtc = new DateTimeOffset(
-                DateTime.SpecifyKind(fileInfo.LastWriteTimeUtc, DateTimeKind.Utc));
-            if (lastWriteTimeUtc < cutoffUtc)
-            {
-                return false;
-            }
-
-            candidate = new SessionFileCandidate(
-                sessionId,
-                path,
-                lastWriteTimeUtc,
-                fileInfo.Length,
-                IsReadBlocked(path));
-            return true;
-        }
-        catch (IOException)
-        {
-            metadataReadFailed = true;
-            return false;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            metadataReadFailed = true;
-            return false;
-        }
-    }
-
     private void AddCandidate(
         PriorityQueue<SessionFileCandidate, (long Ticks, string Path)> selected,
         SessionFileCandidate candidate)
@@ -229,7 +286,7 @@ public sealed class CodexSessionFileDiscovery
         var priority = (
             candidate.LastWriteTimeUtc.UtcDateTime.Ticks,
             candidate.FullPath);
-        if (selected.Count < _maximumCandidates)
+        if (selected.Count < _selectionLimit)
         {
             selected.Enqueue(candidate, priority);
             return;
@@ -245,24 +302,37 @@ public sealed class CodexSessionFileDiscovery
         selected.Enqueue(candidate, priority);
     }
 
-    private static bool TryGetSessionId(string path, out string sessionId)
+    private static bool TryGetIdentity(
+        string path,
+        out string sessionId,
+        out bool isInternal)
     {
         sessionId = string.Empty;
-        var match = SessionFilePattern.Match(Path.GetFileName(path));
-        if (match.Success)
+        isInternal = false;
+
+        var hasFileNameIdentity = TryGetFileNameSessionId(path, out sessionId);
+        var metadata = TryReadSessionMetadata(path);
+        if (metadata is not null)
         {
-            sessionId = HookObservationParser.HashSessionId(
-                match.Groups["sessionId"].Value);
-            return !string.Equals(sessionId, "session-unknown", StringComparison.Ordinal);
+            var metadataSessionId = SessionIdHasher.Hash(metadata.SessionId);
+            if (!hasFileNameIdentity)
+            {
+                sessionId = metadataSessionId;
+            }
+            else if (!string.Equals(sessionId, metadataSessionId, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            isInternal = metadata.IsInternal;
         }
 
-        return TryReadSessionMetaSessionId(path, out sessionId);
+        return !string.IsNullOrWhiteSpace(sessionId)
+            && !string.Equals(sessionId, "session-unknown", StringComparison.Ordinal);
     }
 
-    private static bool TryReadSessionMetaSessionId(string path, out string sessionId)
+    private static SessionMetadata? TryReadSessionMetadata(string path)
     {
-        sessionId = string.Empty;
-
         try
         {
             using var stream = new FileStream(
@@ -274,7 +344,7 @@ public sealed class CodexSessionFileDiscovery
                 options: FileOptions.SequentialScan);
             var buffer = new byte[MaximumSessionMetaBytes];
             var read = 0;
-            var hasNewline = false;
+            var newlineIndex = -1;
             while (read < buffer.Length)
             {
                 var count = stream.Read(buffer, read, buffer.Length - read);
@@ -284,55 +354,76 @@ public sealed class CodexSessionFileDiscovery
                 }
 
                 read += count;
-                if (Array.IndexOf(buffer, (byte)'\n', 0, read) >= 0)
+                newlineIndex = Array.IndexOf(buffer, (byte)'\n', 0, read);
+                if (newlineIndex >= 0)
                 {
-                    hasNewline = true;
                     break;
                 }
             }
 
-            if (read == 0 || (!hasNewline && read == buffer.Length))
+            if (read == 0 || newlineIndex < 0 && read == buffer.Length)
             {
-                return false;
+                return null;
             }
 
-            var newlineIndex = Array.IndexOf(buffer, (byte)'\n', 0, read);
             var lineLength = newlineIndex >= 0 ? newlineIndex + 1 : read;
             using var document = JsonDocument.Parse(buffer.AsMemory(0, lineLength));
             var root = document.RootElement;
             if (!TryGetString(root, "type", out var rootType)
                 || !string.Equals(rootType, "session_meta", StringComparison.Ordinal))
             {
-                return false;
+                return null;
             }
 
-            var idElement = root;
-            if (root.TryGetProperty("payload", out var payload)
-                && payload.ValueKind == JsonValueKind.Object)
+            var payload = root;
+            if (root.TryGetProperty("payload", out var payloadElement)
+                && payloadElement.ValueKind == JsonValueKind.Object)
             {
-                idElement = payload;
+                payload = payloadElement;
             }
 
-            if (!TryGetString(idElement, "id", out var rawSessionId))
+            if (!TryGetString(payload, "id", out var rawSessionId))
             {
-                return false;
+                return null;
             }
 
-            sessionId = HookObservationParser.HashSessionId(rawSessionId);
-            return !string.Equals(sessionId, "session-unknown", StringComparison.Ordinal);
+            return new SessionMetadata(rawSessionId, IsSubagent(payload));
         }
         catch (IOException)
         {
-            return false;
+            return null;
         }
         catch (UnauthorizedAccessException)
         {
-            return false;
+            return null;
         }
         catch (JsonException)
         {
+            return null;
+        }
+    }
+
+    private static bool IsSubagent(JsonElement payload)
+    {
+        if (!payload.TryGetProperty("source", out var source))
+        {
             return false;
         }
+
+        if (source.ValueKind == JsonValueKind.String)
+        {
+            return string.Equals(source.GetString(), "subagent", StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (source.ValueKind != JsonValueKind.Object
+            || !source.TryGetProperty("subagent", out var subagent))
+        {
+            return false;
+        }
+
+        return subagent.ValueKind == JsonValueKind.True
+            || subagent.ValueKind == JsonValueKind.String
+                && !string.IsNullOrWhiteSpace(subagent.GetString());
     }
 
     private static bool TryGetString(
@@ -378,5 +469,56 @@ public sealed class CodexSessionFileDiscovery
         {
             return true;
         }
+    }
+
+    private sealed record SessionMetadata(string SessionId, bool IsInternal);
+}
+
+internal static class CodexSessionCatalogPaths
+{
+    internal static string GetDefaultCodexDirectory()
+    {
+        var candidates = new List<string>();
+        AddCandidate(candidates, Environment.GetEnvironmentVariable("CODEX_HOME"));
+        AddUserProfileCandidate(candidates, Environment.GetEnvironmentVariable("USERPROFILE"));
+        AddUserProfileCandidate(candidates, Environment.GetEnvironmentVariable("HOME"));
+        AddUserProfileCandidate(
+            candidates,
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+
+        var existingCatalog = candidates.FirstOrDefault(HasCatalogData);
+        return existingCatalog
+            ?? candidates.FirstOrDefault()
+            ?? Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".codex");
+    }
+
+    private static void AddUserProfileCandidate(
+        ICollection<string> candidates,
+        string? userProfile)
+    {
+        if (!string.IsNullOrWhiteSpace(userProfile))
+        {
+            AddCandidate(candidates, Path.Combine(userProfile, ".codex"));
+        }
+    }
+
+    private static void AddCandidate(
+        ICollection<string> candidates,
+        string? candidate)
+    {
+        if (!string.IsNullOrWhiteSpace(candidate)
+            && !candidates.Contains(candidate, StringComparer.OrdinalIgnoreCase))
+        {
+            candidates.Add(candidate);
+        }
+    }
+
+    private static bool HasCatalogData(string directory)
+    {
+        return File.Exists(Path.Combine(directory, "session_index.jsonl"))
+            || File.Exists(Path.Combine(directory, "state_5.sqlite"))
+            || Directory.Exists(Path.Combine(directory, "sessions"));
     }
 }

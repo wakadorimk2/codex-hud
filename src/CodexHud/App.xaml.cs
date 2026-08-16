@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.IO;
 using System.Windows;
 using DrawingIcon = System.Drawing.Icon;
 using DrawingSystemIcons = System.Drawing.SystemIcons;
@@ -9,21 +11,19 @@ namespace CodexHud;
 
 public partial class App : System.Windows.Application
 {
-    private static readonly TimeSpan SessionCatalogCleanupInterval =
-        TimeSpan.FromMinutes(1);
+    private static readonly TimeSpan FullRefreshInterval = TimeSpan.FromSeconds(30);
 
     private Mutex? _instanceMutex;
     private bool _ownsInstanceMutex;
-    private NamedPipeStateServer? _stateServer;
-    private SessionStateStore? _stateStore;
-    private CodexSessionCatalogProbe? _catalogProbe;
+    private SessionMonitorEngine? _monitorEngine;
     private CodexSessionFileDiscovery? _sessionFileDiscovery;
-    private CodexSessionEventProbe? _sessionEventProbe;
-    private SessionCatalogReconciler? _sessionCatalogReconciler;
     private CodexSessionFileWatcher? _sessionFileWatcher;
-    private CancellationTokenSource? _catalogCleanupShutdown;
-    private Task? _catalogCleanupTask;
-    private SessionCatalogReconciliationQueue? _catalogReconciliationQueue;
+    private SessionMonitorWorkQueue? _monitorWorkQueue;
+    private CancellationTokenSource? _monitorShutdown;
+    private Task? _monitorTask;
+    private readonly ConcurrentDictionary<string, byte> _pendingPaths = new(
+        StringComparer.OrdinalIgnoreCase);
+    private int _fullRefreshRequested;
     private MainWindow? _window;
     private Forms.NotifyIcon? _trayIcon;
     private DrawingIcon? _trayIconImage;
@@ -32,14 +32,13 @@ public partial class App : System.Windows.Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
-        if (e.Args.Any(argument => string.Equals(argument, "--hook", StringComparison.OrdinalIgnoreCase)))
+        if (e.Args.Any(argument => string.Equals(
+                argument,
+                "--hook",
+                StringComparison.OrdinalIgnoreCase)))
         {
-            var exitCode = HookBridge.CreateDefault()
-                .RunAsync(Console.In)
-                .GetAwaiter()
-                .GetResult();
-            Environment.ExitCode = exitCode;
-            Shutdown(exitCode);
+            Environment.ExitCode = 0;
+            Shutdown(0);
             return;
         }
 
@@ -62,58 +61,48 @@ public partial class App : System.Windows.Application
             return;
         }
 
-        _stateStore = new SessionStateStore();
-        _catalogProbe = new CodexSessionCatalogProbe();
         _sessionFileDiscovery = new CodexSessionFileDiscovery();
-        _sessionEventProbe = new CodexSessionEventProbe();
-        _sessionCatalogReconciler = new SessionCatalogReconciler(
-            _stateStore,
-            _catalogProbe,
+        var codexDirectory = Directory.GetParent(_sessionFileDiscovery.SessionsRoot)?.FullName
+            ?? _sessionFileDiscovery.SessionsRoot;
+        _monitorEngine = new SessionMonitorEngine(
             _sessionFileDiscovery,
-            _sessionEventProbe,
-            RequestSessionCatalogReconciliation);
+            activitySource: new WindowsSessionActivitySource(codexDirectory));
+        _monitorEngine.SessionsChanged += OnSessionsChanged;
 
         _window = new MainWindow();
-        _window.SetSessions(_stateStore.CurrentSessions);
-        _stateStore.SessionsChanged += OnSessionsChanged;
+        _window.SetSessions(_monitorEngine.GetVisibleSessions());
 
-        _stateServer = new NamedPipeStateServer(HandleHookObservation);
-        _stateServer.Start();
-
-        _catalogCleanupShutdown = new CancellationTokenSource();
-        _catalogReconciliationQueue = new SessionCatalogReconciliationQueue(
-            ReconcileSessionCatalog);
+        _monitorShutdown = new CancellationTokenSource();
+        _monitorWorkQueue = new SessionMonitorWorkQueue(ProcessMonitorWork);
         _sessionFileWatcher = new CodexSessionFileWatcher(
             _sessionFileDiscovery.SessionsRoot,
-            RequestSessionCatalogReconciliation);
-        _catalogCleanupTask = RunSessionCatalogCleanupAsync(
-            _catalogCleanupShutdown.Token);
+            OnSessionFileChanged,
+            codexDirectory);
+        _monitorTask = RunPeriodicFullRefreshAsync(_monitorShutdown.Token);
 
         MainWindow = _window;
         _window.Show();
         InitializeTrayIcon();
 
-        RequestSessionCatalogReconciliation();
+        RequestFullRefresh();
     }
 
     protected override void OnExit(ExitEventArgs e)
     {
         DisposeTrayIcon();
 
-        if (_stateStore is not null)
+        if (_monitorEngine is not null)
         {
-            _stateStore.SessionsChanged -= OnSessionsChanged;
+            _monitorEngine.SessionsChanged -= OnSessionsChanged;
         }
 
-        _catalogCleanupShutdown?.Cancel();
+        _monitorShutdown?.Cancel();
         _sessionFileWatcher?.Dispose();
         _sessionFileWatcher = null;
         try
         {
-            _catalogCleanupTask?.GetAwaiter().GetResult();
-
-            _stateServer?.Dispose();
-            _catalogReconciliationQueue?.Dispose();
+            _monitorTask?.GetAwaiter().GetResult();
+            _monitorWorkQueue?.Dispose();
         }
         catch (OperationCanceledException)
         {
@@ -123,16 +112,15 @@ public partial class App : System.Windows.Application
         }
         finally
         {
-            _catalogCleanupShutdown?.Dispose();
-            _catalogCleanupShutdown = null;
-            _catalogCleanupTask = null;
-            _catalogReconciliationQueue = null;
-            _sessionCatalogReconciler = null;
-            _sessionEventProbe = null;
+            _monitorShutdown?.Dispose();
+            _monitorShutdown = null;
+            _monitorTask = null;
+            _monitorWorkQueue = null;
+            _monitorEngine?.Dispose();
+            _monitorEngine = null;
             _sessionFileDiscovery = null;
+            _pendingPaths.Clear();
         }
-
-        _stateStore?.Dispose();
 
         if (_ownsInstanceMutex)
         {
@@ -146,19 +134,89 @@ public partial class App : System.Windows.Application
     private void OnSessionsChanged(object? sender, SessionsChangedEventArgs e)
     {
         var window = _window;
-        var stateStore = _stateStore;
-        if (window is null || stateStore is null)
+        if (window is null)
         {
             return;
         }
 
+        var sessions = e.Sessions;
         _ = window.Dispatcher.BeginInvoke(
             new Action(() =>
             {
-                var sessions = stateStore.CurrentSessions;
                 window.SetSessions(sessions);
                 UpdateTrayState(sessions);
             }));
+    }
+
+    private void OnSessionFileChanged(SessionFileChange change)
+    {
+        if (change.RequiresFullRefresh)
+        {
+            Interlocked.Exchange(ref _fullRefreshRequested, 1);
+        }
+        else
+        {
+            foreach (var path in change.Paths)
+            {
+                _pendingPaths[path] = 0;
+            }
+        }
+
+        _monitorWorkQueue?.Request();
+    }
+
+    private void RequestFullRefresh()
+    {
+        Interlocked.Exchange(ref _fullRefreshRequested, 1);
+        _monitorWorkQueue?.Request();
+    }
+
+    private void ProcessMonitorWork()
+    {
+        var engine = _monitorEngine;
+        if (engine is null)
+        {
+            return;
+        }
+
+        var nowUtc = DateTimeOffset.UtcNow;
+        if (Interlocked.Exchange(ref _fullRefreshRequested, 0) != 0)
+        {
+            _pendingPaths.Clear();
+            engine.RefreshActiveSessions(nowUtc);
+            return;
+        }
+
+        var paths = _pendingPaths.Keys.ToArray();
+        foreach (var path in paths)
+        {
+            _pendingPaths.TryRemove(path, out _);
+        }
+
+        if (paths.Length == 0)
+        {
+            engine.AdvanceLifecycle(nowUtc);
+        }
+        else
+        {
+            engine.PollPaths(paths, nowUtc);
+        }
+    }
+
+    private async Task RunPeriodicFullRefreshAsync(CancellationToken cancellationToken)
+    {
+        using var timer = new PeriodicTimer(FullRefreshInterval);
+        try
+        {
+            while (await timer.WaitForNextTickAsync(cancellationToken)
+                       .ConfigureAwait(false))
+            {
+                RequestFullRefresh();
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
     }
 
     private void InitializeTrayIcon()
@@ -192,7 +250,8 @@ public partial class App : System.Windows.Application
         };
         _trayIcon.DoubleClick += OnTrayIconDoubleClick;
 
-        UpdateTrayState(_stateStore?.CurrentSessions ?? Array.Empty<SessionLampState>());
+        UpdateTrayState(_monitorEngine?.GetVisibleSessions()
+            ?? Array.Empty<SessionLampState>());
     }
 
     private void UpdateTrayState(IReadOnlyList<SessionLampState> sessions)
@@ -202,17 +261,16 @@ public partial class App : System.Windows.Application
             return;
         }
 
-        var needsAttentionCount = sessions.Count(
-            session => session.State == LampState.NeedsAttention);
-        var runningCount = sessions.Count(
-            session => session.State == LampState.Running);
-        var idleCount = sessions.Count(
-            session => session.State == LampState.Idle);
-
+        var activeCount = sessions.Count(session => session.State == LampState.Active);
+        var listeningCount = sessions.Count(session => session.State == LampState.Listening);
+        var idleCount = sessions.Count(session => session.State == LampState.Idle);
+        var completedCount = sessions.Count(session => session.State == LampState.Completed);
+        var abortedCount = sessions.Count(session => session.State == LampState.Aborted);
+        var readErrorCount = sessions.Count(session => session.State == LampState.ReadError);
         var status = sessions.Count == 0
             ? "セッションなし"
-            : $"要対応 {needsAttentionCount} / 実行中 {runningCount} / Idle {idleCount}";
-        _trayIcon.Text = LimitTrayText($"Codex HUD: 起動中 / {status}");
+            : $"Act {activeCount} / Lis {listeningCount} / Idl {idleCount} / Cmp {completedCount} / Abt {abortedCount} / Err {readErrorCount}";
+        _trayIcon.Text = LimitTrayText($"Codex HUD: {status}");
         UpdateTrayMenuState();
     }
 
@@ -285,7 +343,7 @@ public partial class App : System.Windows.Application
         var processPath = Environment.ProcessPath;
         if (processPath is null
             || processPath.Length == 0
-            || !System.IO.File.Exists(processPath))
+            || !File.Exists(processPath))
         {
             return null;
         }
@@ -310,42 +368,5 @@ public partial class App : System.Windows.Application
         return text.Length <= maxNotifyIconTextLength
             ? text
             : text[..maxNotifyIconTextLength];
-    }
-
-    private void HandleHookObservation(HookObservation observation)
-    {
-        if (_stateStore is null)
-        {
-            return;
-        }
-
-        _stateStore.Apply(observation);
-        RequestSessionCatalogReconciliation();
-    }
-
-    private void RequestSessionCatalogReconciliation()
-    {
-        _catalogReconciliationQueue?.Request();
-    }
-
-    private void ReconcileSessionCatalog()
-    {
-        _sessionCatalogReconciler?.Reconcile();
-    }
-
-    private async Task RunSessionCatalogCleanupAsync(CancellationToken cancellationToken)
-    {
-        using var timer = new PeriodicTimer(SessionCatalogCleanupInterval);
-        try
-        {
-            while (await timer.WaitForNextTickAsync(cancellationToken)
-                       .ConfigureAwait(false))
-            {
-                RequestSessionCatalogReconciliation();
-            }
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-        }
     }
 }

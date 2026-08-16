@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
@@ -5,6 +6,12 @@ using System.Text.Json;
 using CodexHud.Domain;
 
 namespace CodexHud.Infrastructure;
+
+public sealed record JsonlReadResult(
+    IReadOnlyList<JsonlActivityObservation> Observations,
+    bool ReadError,
+    bool HasBacklog,
+    int BytesConsumed = 0);
 
 public sealed class CodexSessionEventProbe
 {
@@ -25,6 +32,20 @@ public sealed class CodexSessionEventProbe
         int perSessionByteBudget = DefaultPerSessionByteBudget,
         int totalByteBudget = DefaultTotalByteBudget)
     {
+        return ReadCandidates(
+                discovery.Candidates,
+                observedAtUtc,
+                perSessionByteBudget,
+                totalByteBudget)
+            .Observations;
+    }
+
+    public JsonlReadResult ReadCandidates(
+        IEnumerable<SessionFileCandidate> candidates,
+        DateTimeOffset observedAtUtc,
+        int perSessionByteBudget = DefaultPerSessionByteBudget,
+        int totalByteBudget = DefaultTotalByteBudget)
+    {
         if (perSessionByteBudget <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(perSessionByteBudget));
@@ -37,48 +58,28 @@ public sealed class CodexSessionEventProbe
 
         observedAtUtc = observedAtUtc.ToUniversalTime();
         var observations = new List<JsonlActivityObservation>();
+        var readError = false;
         var remainingTotalBudget = totalByteBudget;
         var currentPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         HasBacklog = false;
 
-        foreach (var candidate in discovery.Candidates)
+        foreach (var candidate in candidates)
         {
             currentPaths.Add(candidate.FullPath);
-            if (candidate.ReadBlocked)
-            {
-                continue;
-            }
-
             if (remainingTotalBudget <= 0)
             {
                 HasBacklog = true;
                 break;
             }
 
-            var sessionBudget = Math.Min(
-                perSessionByteBudget,
-                remainingTotalBudget);
-            var cursor = GetCursor(candidate.FullPath);
-            if (ReadCandidate(
-                    candidate,
-                    cursor,
-                    observedAtUtc,
-                    sessionBudget,
-                    observations,
-                    out var bytesConsumed,
-                    out var hasBacklog))
-            {
-                remainingTotalBudget -= bytesConsumed;
-            }
-            else
-            {
-                remainingTotalBudget -= bytesConsumed;
-            }
-
-            if (hasBacklog)
-            {
-                HasBacklog = true;
-            }
+            var sessionBudget = Math.Min(perSessionByteBudget, remainingTotalBudget);
+            var result = ReadCandidate(candidate, observedAtUtc, sessionBudget);
+            observations.AddRange(result.Observations);
+            readError |= result.ReadError;
+            HasBacklog |= result.HasBacklog;
+            remainingTotalBudget = Math.Max(
+                0,
+                remainingTotalBudget - result.BytesConsumed);
         }
 
         foreach (var path in _cursors.Keys.ToArray())
@@ -89,7 +90,40 @@ public sealed class CodexSessionEventProbe
             }
         }
 
-        return observations;
+        return new JsonlReadResult(observations, readError, HasBacklog);
+    }
+
+    public JsonlReadResult ReadCandidate(
+        SessionFileCandidate candidate,
+        DateTimeOffset observedAtUtc,
+        int sessionByteBudget = DefaultPerSessionByteBudget)
+    {
+        if (sessionByteBudget <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(sessionByteBudget));
+        }
+
+        if (candidate.ReadBlocked)
+        {
+            return new JsonlReadResult(
+                Array.Empty<JsonlActivityObservation>(),
+                ReadError: true,
+                HasBacklog: false);
+        }
+
+        var cursor = GetCursor(candidate.FullPath);
+        var observations = new List<JsonlActivityObservation>();
+        var result = ReadCandidateCore(
+            candidate,
+            cursor,
+            observedAtUtc.ToUniversalTime(),
+            sessionByteBudget,
+            observations);
+        return new JsonlReadResult(
+            observations,
+            result.ReadError,
+            result.HasBacklog,
+            result.BytesConsumed);
     }
 
     private FileCursor GetCursor(string path)
@@ -104,26 +138,27 @@ public sealed class CodexSessionEventProbe
         return cursor;
     }
 
-    private static bool ReadCandidate(
+    private static ReadCoreResult ReadCandidateCore(
         SessionFileCandidate candidate,
         FileCursor cursor,
         DateTimeOffset observedAtUtc,
         int sessionBudget,
-        ICollection<JsonlActivityObservation> observations,
-        out int bytesConsumed,
-        out bool hasBacklog)
+        ICollection<JsonlActivityObservation> observations)
     {
-        bytesConsumed = 0;
-        hasBacklog = false;
-
+        var bytesConsumed = 0;
         var firstRecordSignature = TryReadFirstRecordSignature(
             candidate.FullPath,
             Math.Min(FirstRecordProbeBytes, sessionBudget),
-            out var signatureBytes);
+            out var signatureBytes,
+            out var signatureReadError);
         bytesConsumed += signatureBytes;
-        var remainingBudget = sessionBudget - signatureBytes;
+        if (signatureReadError)
+        {
+            return new ReadCoreResult(bytesConsumed, ReadError: true, HasBacklog: false);
+        }
 
-        DateTimeOffset? creationTimeUtc = null;
+        var remainingBudget = sessionBudget - signatureBytes;
+        DateTimeOffset? creationTimeUtc;
         try
         {
             creationTimeUtc = new DateTimeOffset(
@@ -133,11 +168,11 @@ public sealed class CodexSessionEventProbe
         }
         catch (IOException)
         {
-            return false;
+            return new ReadCoreResult(bytesConsumed, ReadError: true, HasBacklog: false);
         }
         catch (UnauthorizedAccessException)
         {
-            return false;
+            return new ReadCoreResult(bytesConsumed, ReadError: true, HasBacklog: false);
         }
 
         var replaced = cursor.Initialized
@@ -159,11 +194,12 @@ public sealed class CodexSessionEventProbe
             cursor.Initialized = true;
             cursor.CreationTimeUtc = creationTimeUtc;
             cursor.FirstRecordSignature = firstRecordSignature;
-
             if (remainingBudget <= 0)
             {
-                hasBacklog = candidate.Length > 0;
-                return false;
+                return new ReadCoreResult(
+                    bytesConsumed,
+                    ReadError: false,
+                    HasBacklog: candidate.Length > 0);
             }
 
             var startOffset = Math.Max(0, candidate.Length - remainingBudget);
@@ -182,8 +218,10 @@ public sealed class CodexSessionEventProbe
 
         if (candidate.Length <= cursor.Offset || remainingBudget <= 0)
         {
-            hasBacklog = candidate.Length > cursor.Offset;
-            return false;
+            return new ReadCoreResult(
+                bytesConsumed,
+                ReadError: false,
+                HasBacklog: candidate.Length > cursor.Offset);
         }
 
         var bytesToRead = (int)Math.Min(
@@ -202,8 +240,8 @@ public sealed class CodexSessionEventProbe
             if (stream.Length < start)
             {
                 cursor.Reset();
-                hasBacklog = true;
-                return false;
+                cursor.Initialized = true;
+                return new ReadCoreResult(bytesConsumed, ReadError: false, HasBacklog: true);
             }
 
             stream.Position = start;
@@ -229,27 +267,29 @@ public sealed class CodexSessionEventProbe
 
             cursor.Offset = start + read;
             bytesConsumed += read;
-            hasBacklog = cursor.Offset < stream.Length;
-            return true;
+            return new ReadCoreResult(
+                bytesConsumed,
+                ReadError: false,
+                HasBacklog: cursor.Offset < stream.Length);
         }
         catch (IOException)
         {
-            hasBacklog = false;
-            return false;
+            return new ReadCoreResult(bytesConsumed, ReadError: true, HasBacklog: false);
         }
         catch (UnauthorizedAccessException)
         {
-            hasBacklog = false;
-            return false;
+            return new ReadCoreResult(bytesConsumed, ReadError: true, HasBacklog: false);
         }
     }
 
     private static string? TryReadFirstRecordSignature(
         string path,
         int budget,
-        out int bytesConsumed)
+        out int bytesConsumed,
+        out bool readError)
     {
         bytesConsumed = 0;
+        readError = false;
         if (budget <= 0)
         {
             return null;
@@ -289,10 +329,12 @@ public sealed class CodexSessionEventProbe
         }
         catch (IOException)
         {
+            readError = true;
             return null;
         }
         catch (UnauthorizedAccessException)
         {
+            readError = true;
             return null;
         }
     }
@@ -401,33 +443,67 @@ public sealed class CodexSessionEventProbe
 
             if (TryGetString(payload, "session_id", out var payloadSessionId)
                 && !string.Equals(
-                    HookObservationParser.HashSessionId(payloadSessionId),
+                    SessionIdHasher.Hash(payloadSessionId),
                     candidateSessionId,
                     StringComparison.Ordinal))
             {
                 return;
             }
 
-            var activityKind = payloadType switch
+            switch (payloadType)
             {
-                "task_started" => JsonlActivityKind.TurnStarted,
-                "task_complete" => JsonlActivityKind.TurnCompleted,
-                _ => (JsonlActivityKind?)null
-            };
-            if (!activityKind.HasValue)
-            {
-                return;
-            }
+                case "task_started":
+                    observations.Add(new JsonlActivityObservation(
+                        candidateSessionId,
+                        JsonlActivityKind.TurnStarted,
+                        observedAtUtc));
+                    return;
+                case "turn_aborted":
+                    observations.Add(new JsonlActivityObservation(
+                        candidateSessionId,
+                        JsonlActivityKind.TurnAborted,
+                        observedAtUtc));
+                    return;
+                case "task_complete":
+                    if (!HasAssistantMessage(payload))
+                    {
+                        return;
+                    }
 
-            observations.Add(new JsonlActivityObservation(
-                candidateSessionId,
-                activityKind.Value,
-                observedAtUtc));
+                    observations.Add(new JsonlActivityObservation(
+                        candidateSessionId,
+                        JsonlActivityKind.TurnCompleted,
+                        observedAtUtc));
+                    return;
+                default:
+                    return;
+            }
         }
         catch (JsonException)
         {
-            // A malformed JSONL record is not evidence of a state transition.
+            // A malformed JSONL record is not state evidence.
         }
+    }
+
+    private static bool HasAssistantMessage(JsonElement payload)
+    {
+        if (!payload.TryGetProperty("last_agent_message", out var message)
+            || message.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+        {
+            return false;
+        }
+
+        if (message.ValueKind == JsonValueKind.String)
+        {
+            return !string.IsNullOrWhiteSpace(message.GetString());
+        }
+
+        if (message.ValueKind == JsonValueKind.Object)
+        {
+            return message.EnumerateObject().Any();
+        }
+
+        return true;
     }
 
     private static bool TryGetString(
@@ -478,4 +554,9 @@ public sealed class CodexSessionEventProbe
             Line.Clear();
         }
     }
+
+    private sealed record ReadCoreResult(
+        int BytesConsumed,
+        bool ReadError,
+        bool HasBacklog);
 }

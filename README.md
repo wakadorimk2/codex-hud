@@ -1,221 +1,123 @@
 # Codex HUD
 
-Codexの現在状態を、画面端に小さく持続表示するWindows HUDです。
+Codexのローカルセッション記録を監視し、現在状態を画面端へ小さく表示するWindows HUDです。
 
-Codex Desktopを別の作業と並行して使うときに、実行中、要対応、停止中のセッションを見失わないことを目的にします。
-
-<table align="center">
-  <tr>
-    <td align="center">
-      <img src="docs/assets/codex-hud-lamps.png" alt="Codex HUDの複数セッション混在表示例">
-      <br>
-      <sub>複数セッションの混在表示</sub>
-    </td>
-    <td align="center">
-      <img src="docs/assets/codex-hud-lamps-running-stop.png" alt="Codex HUDのRunningとStopの表示例">
-      <br>
-      <sub>Running / Stop の表示例</sub>
-    </td>
-  </tr>
-</table>
+HUDはCodexを操作しません。Hookを状態同期の起点にしません。
 
 ## Features
 
-- Codex Hookからセッション状態を読み取ります。
-- セッションごとに状態ランプを表示します。
-- `Running`、`NeedsAttention`、`Idle`を視覚的に区別します。
-- `Stop`は、要対応状態を保ったまま、暗いグレーで表示します。
-- タスクトレイからHUDの表示、位置編集、終了を操作できます。
-- タスクトレイのツールチップに、起動状態とセッション状態の件数を表示します。
-- EXEとタスクトレイに、青い専用HUDアイコンを表示します。
-- HUDはCodexを操作しません。
-- Hookの生データ、prompt、command、tool input、cwdをHUDへ渡しません。
-- ランプは通常時にクリックを透過します。
+- `%CODEX_HOME%\sessions`以下のJSONLを再帰探索します。
+- `state_5.sqlite`を任意の補助根拠として読み取ります。
+- FileSystemWatcherと30秒周期の全体再探索で表示集合を同期します。
+- 同じセッションIDを一つのランプだけで表示します。
+- 表示集合を最近30分、最大64セッションへ制限します。
+- セッション0件でもHUDを常駐します。
+- 36 DIPのランプ、折返し、位置保存、クリック透過を維持します。
+- prompt、回答本文、command、tool input、cwd、生JSONLをStore、ログ、UIへ渡しません。
+
+## Lamp states
+
+| 状態 | 根拠 | 色 |
+| --- | --- | --- |
+| `Active` | `task_started`、または新しいSQLite活動 | 青 |
+| `Listening` | 最近のファイル活動、読取待ち、identity保留 | 紫 |
+| `Idle` | 最近の活動なし | 灰 |
+| `Completed` | 非silentな`task_complete` | 緑 |
+| `Aborted` | `turn_aborted` | 赤 |
+| `ReadError` | JSONLの読取エラー | 赤橙 |
+
+`Listening`は承認待ちまたは質問待ちを断定しません。
+
+`Active`と`Listening`だけが弱く動きます。その他の状態は短い遷移後に安定します。
 
 ## Current implementation
 
-productionの最小経路は、次の構成です。
-
 ```text
-Codex Hook
-  → CodexHud.exe --hook
-  → sanitized HookObservation
-  → Named Pipe
-  → SessionStateStore
-  → WPF MainWindow
-  → SkiaSharp lamp renderer
+sessions/**/*.jsonl ─┐
+                     ├─> SessionMonitorEngine ─> MainWindow ─> SkiaSharp lamps
+state_5.sqlite  ─────┘       ▲
+                             │
+              FileSystemWatcher + 30秒周期全体再探索
 ```
 
-現在の実装は、`net10.0-windows`、WPF、SkiaSharp、Windows Named Pipeを使用します。
+参考方式は、[codex-monitor-hud](https://github.com/LH-03/codex-monitor-hud)のローカルJSONL探索、増分読取、定期照合の考え方に合わせています。
 
-アプリケーションアイコンは[`src/CodexHud/Assets/CodexHud.ico`](src/CodexHud/Assets/CodexHud.ico)を使用します。
+`state_5.sqlite`は`winsqlite3.dll`で読み取り専用に開きます。DLL、DB、schema、lockの問題はJSONLの動作を止めません。
 
-通常起動時は、タスクバーにボタンを表示せず、タスクトレイへアイコンを表示します。
+`session_index.jsonl`は変更時の全体再探索を起動します。古い記録だけではランプを作りません。
 
-タスクトレイからHUDを非表示にしても、Named PipeとSession State Storeは動作を続けます。
+`%LOCALAPPDATA%\CodexHud\sessions.json`は表示集合の正ではありません。既存ファイルを削除しません。
 
-## Current verification
+## Hook compatibility
 
-| Item | Status |
-| --- | --- |
-| Production bridge、Named Pipe、SessionStateStore、HUD | Implemented |
-| Desktopでの`SessionStart`、`UserPromptSubmit`、`PermissionRequest`、`Stop` | Verified |
-| Desktopでの`SessionEnd` | Not verified |
-| Desktop Hookの遅延、重複、取りこぼし | Not verified |
+通常起動はHookを待ちません。
 
-未確認の挙動は、確定した仕様として扱いません。
+`CodexHud.exe --hook`は互換用の即時終了です。状態更新とHUD起動を行わず、終了コード0を返します。
+
+インストーラーとアンインストーラーは`hooks.json`を読み書きしません。既存Hookを変更しません。
+
+`tools\install-hooks.ps1`は手動移行用の旧資料です。通常のリリースZIPとインストール経路には含めません。
 
 ## Quick start
 
 ### Requirements
 
-For development:
-
 - Windows
 - .NET 10 SDK
 
-For the release ZIP:
+リリースZIPはself-containedです。
 
-- Windows x64
-- No .NET Desktop Runtime
-
-The release ZIP is self-contained. It includes the .NET runtime and SkiaSharp native DLLs.
-
-### Developer workflow
-
-リポジトリのルートで実行します。
+### Development
 
 ```powershell
 dotnet build .\src\CodexHud\CodexHud.csproj -c Release
 dotnet run --project .\src\CodexHud\CodexHud.csproj -c Release
 ```
 
-引数なしで起動すると、HUDとNamed Pipe serverを起動します。
+起動後、セッションが0件でもHUDは常駐します。
 
-Release ZIPを作成します。
+### Release package
 
 ```powershell
 pwsh -NoProfile -File .\tools\publish-release.ps1
 ```
 
-ZIPは`artifacts\CodexHud-<version>-win-x64.zip`へ作成します。
+### Install
 
-### Package user workflow
-
-ZIPを展開したフォルダーで、次の1コマンドを実行します。
+展開したリリースZIPで実行します。
 
 ```powershell
 powershell -NoProfile -File .\Install-CodexHud.ps1
 ```
 
-インストーラーは`app\CodexHud.exe`を確認します。
+インストーラーはアプリとスタートメニューショートカットだけを更新します。
 
-インストーラーは`%LOCALAPPDATA%\CodexHud\App`へアプリを配置します。
-
-インストーラーはスタートメニューの`Codex HUD.lnk`をインストール先EXEへ更新します。
-
-インストーラーは`SessionStart`、`UserPromptSubmit`、`PermissionRequest`、`Stop`、`SessionEnd`のHook dry-runを表示します。
-
-既存のリポジトリ版HUD Hookが1つのコマンドだけの場合、その完全一致コマンドを削除対象として表示します。
-
-旧HUD Hookコマンドが複数ある場合、インストーラーはHookを自動変更しません。
-
-Enterlightなど、異なるHookコマンドは保持します。
-
-内容を確認して`Y`を入力した場合だけ、`hooks.json`を書き換えます。
-
-適用前に`hooks.json.backup-<timestamp>`を作成します。
-
-`N`を入力した場合、Hookは変更しません。
-
-Hook適用が成功した場合だけ、インストール先HUDを起動します。
-
-インストール先HUDは管理者権限を要求しません。
-
-インストール先HUDはレジストリ、Program Files、ログイン時スタートアップを変更しません。
-
-状態ファイルは`%LOCALAPPDATA%\CodexHud\position.json`と`%LOCALAPPDATA%\CodexHud\sessions.json`へ保存します。
-
-アンインストールは、ZIPを展開したフォルダーで実行します。
+### Uninstall
 
 ```powershell
 powershell -NoProfile -File .\Uninstall-CodexHud.ps1
 ```
 
-アンインストーラーは、インストール先EXEを指すHookだけをdry-runで削除対象にします。
+アンインストーラーはアプリと所有するショートカットだけを削除します。
 
-確認後だけ`hooks.json`を変更します。
+Hook設定は変更しません。
 
-アンインストーラーは別のEXEを指すショートカットを削除しません。
-
-アンインストーラーは`%LOCALAPPDATA%\CodexHud\App`だけを削除します。
-
-`position.json`と`sessions.json`は残します。
-
-### Developer start menu shortcut
-
-Release EXEをbuildした後に、一度だけ実行します。
-
-```powershell
-dotnet build .\src\CodexHud\CodexHud.csproj -c Release
-pwsh -NoProfile -File .\tools\install-start-menu-shortcut.ps1
-```
-
-以後は、Windowsのスタートメニューから`Codex HUD`を起動します。
-
-リポジトリを移動した場合は、同じスクリプトを再実行してショートカットを更新します。
-
-Windowsログイン時の自動起動は設定しません。
-
-### Tests
+## Tests
 
 ```powershell
 dotnet run --project .\tests\CodexHud.Tests\CodexHud.Tests.csproj -c Release
 python -m unittest discover -s experiments -p 'test_*.py'
 ```
 
-### Hook setup
-
-Hookの確認とproduction bridgeへの切り替えは、バックアップ付きの手順を使います。
-
-まずdry-runの結果を確認してください。
-
-詳細は[`docs/hooks-setup.md`](docs/hooks-setup.md)を参照してください。
-
-## Runtime modes
-
-通常起動:
-
-```powershell
-CodexHud.exe
-```
-
-Hook bridge:
-
-```powershell
-CodexHud.exe --hook
-```
-
-`--hook`は標準入力を一回読みます。
-
-bridgeは、許可されたイベント名と匿名化済みセッション識別子だけをNamed Pipeへ送信します。
-
-## Design boundaries
-
-- Session State Storeが現在状態の正を保持します。
-- HUDはCodex固有のファイル形式やHook JSONを直接解釈しません。
-- HUDから承認、回答入力、turn操作を実行しません。
-- タスクトレイからCodexの承認、回答入力、turn操作を実行しません。
-- 無更新、プロセス終了、ウィンドウ非表示だけで`Completed`や`Error`へ遷移しません。
-- 複数モニター最適化、サウンド、粒子、3Dは現在の対象外です。
+テストはJSONLイベント、silent完了、malformed JSON、未知イベント、ファイル置換、SQLiteフォールバック、重複排除、64件上限、30分窓、内部セッション除外、状態遷移、Watcher、描画、配置、Hook非接触を確認します。
 
 ## Documentation
 
 | Document | Description |
 | --- | --- |
-| [`docs/architecture.md`](docs/architecture.md) | アーキテクチャ、責務境界、状態モデル |
-| [`docs/implementation.md`](docs/implementation.md) | 実装構成、build、テスト、手動受け入れ条件 |
-| [`docs/hud.md`](docs/hud.md) | HUDの表示、操作、ランプ仕様 |
-| [`docs/probe.md`](docs/probe.md) | Probeの検証計画と状態判定規則 |
-| [`docs/hooks-findings.md`](docs/hooks-findings.md) | Hookの観測結果と未確認事項 |
-| [`docs/hooks-setup.md`](docs/hooks-setup.md) | Hook Probeとproduction bridgeの設定手順 |
+| [`docs/architecture.md`](docs/architecture.md) | 監視エンジン、情報源、状態モデル |
+| [`docs/probe.md`](docs/probe.md) | JSONLとSQLiteの観測境界 |
+| [`docs/implementation.md`](docs/implementation.md) | 実装構成、定数、検証コマンド |
+| [`docs/hud.md`](docs/hud.md) | ランプ、配置、トレイ表示 |
+| [`docs/hooks-findings.md`](docs/hooks-findings.md) | 旧Hook方式の歴史資料 |
+| [`docs/hooks-setup.md`](docs/hooks-setup.md) | 旧Hook手動資料。現行経路では使用しない |

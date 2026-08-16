@@ -2,57 +2,37 @@ using System.IO;
 
 namespace CodexHud.Infrastructure;
 
+public sealed record SessionFileChange(
+    IReadOnlyList<string> Paths,
+    bool RequiresFullRefresh);
+
 public sealed class CodexSessionFileWatcher : IDisposable
 {
-    private readonly Action _onChanged;
-    private readonly FileSystemWatcher? _watcher;
+    private readonly string _sessionsRoot;
+    private readonly string _codexDirectory;
+    private readonly Action<SessionFileChange> _onChanged;
+    private readonly List<FileSystemWatcher> _watchers = new();
     private int _disposed;
 
-    public CodexSessionFileWatcher(string sessionsRoot, Action onChanged)
+    public CodexSessionFileWatcher(
+        string sessionsRoot,
+        Action<SessionFileChange> onChanged,
+        string? codexDirectory = null)
     {
         if (string.IsNullOrWhiteSpace(sessionsRoot))
         {
             throw new ArgumentException("A sessions root is required.", nameof(sessionsRoot));
         }
 
+        _sessionsRoot = Path.GetFullPath(sessionsRoot);
+        _codexDirectory = Path.GetFullPath(
+            string.IsNullOrWhiteSpace(codexDirectory)
+                ? Directory.GetParent(_sessionsRoot)?.FullName ?? _sessionsRoot
+                : codexDirectory);
         _onChanged = onChanged ?? throw new ArgumentNullException(nameof(onChanged));
-        var watchDirectory = FindWatchDirectory(sessionsRoot, out var watchJsonlOnly);
-        if (watchDirectory is null)
-        {
-            return;
-        }
 
-        try
-        {
-            _watcher = new FileSystemWatcher(watchDirectory)
-            {
-                Filter = watchJsonlOnly ? "*.jsonl" : "*",
-                IncludeSubdirectories = true,
-                NotifyFilter = NotifyFilters.FileName
-                    | NotifyFilters.LastWrite
-                    | NotifyFilters.Size
-                    | NotifyFilters.CreationTime,
-                EnableRaisingEvents = false
-            };
-            _watcher.Changed += OnChanged;
-            _watcher.Created += OnCreated;
-            _watcher.Deleted += OnDeleted;
-            _watcher.Renamed += OnRenamed;
-            _watcher.Error += OnError;
-            _watcher.EnableRaisingEvents = true;
-        }
-        catch (ArgumentException)
-        {
-            _watcher?.Dispose();
-        }
-        catch (IOException)
-        {
-            _watcher?.Dispose();
-        }
-        catch (UnauthorizedAccessException)
-        {
-            _watcher?.Dispose();
-        }
+        CreateSessionsWatcher();
+        CreateCodexRootWatcher();
     }
 
     public void Dispose()
@@ -62,85 +42,152 @@ public sealed class CodexSessionFileWatcher : IDisposable
             return;
         }
 
-        if (_watcher is null)
+        foreach (var watcher in _watchers)
+        {
+            watcher.Dispose();
+        }
+
+        _watchers.Clear();
+    }
+
+    private void CreateSessionsWatcher()
+    {
+        var watchDirectory = FindExistingDirectory(_sessionsRoot)
+            ?? FindExistingDirectory(_codexDirectory);
+        if (watchDirectory is null)
         {
             return;
         }
 
-        _watcher.Changed -= OnChanged;
-        _watcher.Created -= OnCreated;
-        _watcher.Deleted -= OnDeleted;
-        _watcher.Renamed -= OnRenamed;
-        _watcher.Error -= OnError;
-        _watcher.Dispose();
-    }
-
-    private static string? FindWatchDirectory(
-        string sessionsRoot,
-        out bool watchJsonlOnly)
-    {
-        var fullRoot = Path.GetFullPath(sessionsRoot);
-        if (Directory.Exists(fullRoot))
-        {
-            watchJsonlOnly = true;
-            return fullRoot;
-        }
-
-        var current = Directory.GetParent(fullRoot)?.FullName;
-        while (!string.IsNullOrWhiteSpace(current))
-        {
-            if (Directory.Exists(current))
+        var watchSessionsRootDirectly = Directory.Exists(_sessionsRoot);
+        CreateWatcher(
+            watchDirectory,
+            watchSessionsRootDirectly ? "*.jsonl" : "*",
+            includeSubdirectories: true,
+            onChanged: (path, fullRefresh) =>
             {
-                watchJsonlOnly = false;
-                return current;
-            }
+                if (fullRefresh || IsSessionJsonlPath(path))
+                {
+                    Notify(path, fullRefresh);
+                }
+            });
+    }
 
-            current = Directory.GetParent(current)?.FullName;
+    private void CreateCodexRootWatcher()
+    {
+        var watchDirectory = FindExistingDirectory(_codexDirectory);
+        if (watchDirectory is null)
+        {
+            return;
         }
 
-        watchJsonlOnly = true;
-        return null;
+        CreateWatcher(
+            watchDirectory,
+            "*",
+            includeSubdirectories: false,
+            onChanged: (path, _) =>
+            {
+                var fileName = Path.GetFileName(path);
+                if (fileName.Equals("session_index.jsonl", StringComparison.OrdinalIgnoreCase)
+                    || fileName.Equals("state_5.sqlite", StringComparison.OrdinalIgnoreCase))
+                {
+                    Notify(path, requiresFullRefresh: true);
+                }
+            });
     }
 
-    private void OnChanged(object sender, FileSystemEventArgs e)
+    private void CreateWatcher(
+        string directory,
+        string filter,
+        bool includeSubdirectories,
+        Action<string, bool> onChanged)
     {
-        Notify();
+        try
+        {
+            var watcher = new FileSystemWatcher(directory)
+            {
+                Filter = filter,
+                IncludeSubdirectories = includeSubdirectories,
+                NotifyFilter = NotifyFilters.FileName
+                    | NotifyFilters.LastWrite
+                    | NotifyFilters.Size
+                    | NotifyFilters.CreationTime,
+                EnableRaisingEvents = false
+            };
+            watcher.Changed += (_, e) => onChanged(e.FullPath, false);
+            watcher.Created += (_, e) => onChanged(e.FullPath, true);
+            watcher.Deleted += (_, e) => onChanged(e.FullPath, true);
+            watcher.Renamed += (_, e) =>
+            {
+                onChanged(e.OldFullPath, true);
+                onChanged(e.FullPath, true);
+            };
+            watcher.Error += (_, _) => Notify(string.Empty, requiresFullRefresh: true);
+            watcher.EnableRaisingEvents = true;
+            _watchers.Add(watcher);
+        }
+        catch (ArgumentException)
+        {
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
     }
 
-    private void OnCreated(object sender, FileSystemEventArgs e)
+    private bool IsSessionJsonlPath(string path)
     {
-        Notify();
+        return !string.IsNullOrWhiteSpace(path)
+            && path.EndsWith(".jsonl", StringComparison.OrdinalIgnoreCase)
+            && IsUnderRoot(path, _sessionsRoot);
     }
 
-    private void OnDeleted(object sender, FileSystemEventArgs e)
-    {
-        Notify();
-    }
-
-    private void OnRenamed(object sender, RenamedEventArgs e)
-    {
-        Notify();
-    }
-
-    private void OnError(object sender, ErrorEventArgs e)
-    {
-        Notify();
-    }
-
-    private void Notify()
+    private void Notify(string path, bool requiresFullRefresh)
     {
         if (Volatile.Read(ref _disposed) != 0)
         {
             return;
         }
 
+        var paths = string.IsNullOrWhiteSpace(path)
+            ? Array.Empty<string>()
+            : new[] { Path.GetFullPath(path) };
         try
         {
-            _onChanged();
+            _onChanged(new SessionFileChange(paths, requiresFullRefresh));
         }
         catch (ObjectDisposedException)
         {
             // Shutdown can race with a final watcher notification.
         }
+    }
+
+    private static string? FindExistingDirectory(string path)
+    {
+        var current = Path.GetFullPath(path);
+        while (!string.IsNullOrWhiteSpace(current))
+        {
+            if (Directory.Exists(current))
+            {
+                return current;
+            }
+
+            current = Directory.GetParent(current)?.FullName ?? string.Empty;
+        }
+
+        return null;
+    }
+
+    private static bool IsUnderRoot(string path, string root)
+    {
+        var normalizedRoot = root.TrimEnd(
+                Path.DirectorySeparatorChar,
+                Path.AltDirectorySeparatorChar)
+            + Path.DirectorySeparatorChar;
+        return Path.GetFullPath(path).StartsWith(
+            normalizedRoot,
+            StringComparison.OrdinalIgnoreCase);
     }
 }
